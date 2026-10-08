@@ -1,5 +1,5 @@
 --==================================================*
--- MICAHFX GUN CUSTOMIZER
+-- RED BEE FX GUN CUSTOMIZER
 -- LocalScript
 -- StarterPlayer > StarterPlayerScripts
 --
@@ -140,7 +140,7 @@ local Styles = {
 --==================================================*
 
 local loadingGui = Instance.new("ScreenGui")
-loadingGui.Name = "MICAHFXLoading"
+loadingGui.Name = "REDBEEFXLoading"
 loadingGui.ResetOnSpawn = false
 loadingGui.IgnoreGuiInset = true
 loadingGui.DisplayOrder = 999
@@ -148,15 +148,15 @@ loadingGui.Parent = player:WaitForChild("PlayerGui")
 
 local loadingBackground = Instance.new("Frame")
 loadingBackground.Size = UDim2.fromScale(1, 1)
-loadingBackground.BackgroundColor3 = Color3.fromRGB(20, 14, 18)
+loadingBackground.BackgroundColor3 = Color3.fromRGB(18, 4, 6)
 loadingBackground.BorderSizePixel = 0
 loadingBackground.Parent = loadingGui
 
 local loadingGradient = Instance.new("UIGradient")
 loadingGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 14, 18)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(55, 20, 38)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 14, 18))
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 4, 6)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(90, 10, 14)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 4, 6))
 })
 loadingGradient.Rotation = 45
 loadingGradient.Parent = loadingBackground
@@ -165,8 +165,8 @@ local loadingTitle = Instance.new("TextLabel")
 loadingTitle.Size = UDim2.new(1, 0, 0, 80)
 loadingTitle.Position = UDim2.new(0, 0, 0.5, -70)
 loadingTitle.BackgroundTransparency = 1
-loadingTitle.Text = "MICAHFX"
-loadingTitle.TextColor3 = Color3.fromRGB(255, 145, 185)
+loadingTitle.Text = "RED BEE FX"
+loadingTitle.TextColor3 = Color3.fromRGB(255, 70, 70)
 loadingTitle.Font = Enum.Font.GothamBlack
 loadingTitle.TextSize = 52
 loadingTitle.TextTransparency = 1
@@ -177,7 +177,7 @@ loadingSub.Size = UDim2.new(1, 0, 0, 30)
 loadingSub.Position = UDim2.new(0, 0, 0.5, 5)
 loadingSub.BackgroundTransparency = 1
 loadingSub.Text = "GUN CUSTOMIZER"
-loadingSub.TextColor3 = Color3.fromRGB(255, 220, 232)
+loadingSub.TextColor3 = Color3.fromRGB(255, 170, 170)
 loadingSub.Font = Enum.Font.GothamBold
 loadingSub.TextSize = 14
 loadingSub.TextTransparency = 1
@@ -186,7 +186,7 @@ loadingSub.Parent = loadingBackground
 local loadingBarBack = Instance.new("Frame")
 loadingBarBack.Size = UDim2.fromOffset(240, 6)
 loadingBarBack.Position = UDim2.new(0.5, -120, 0.5, 50)
-loadingBarBack.BackgroundColor3 = Color3.fromRGB(70, 45, 55)
+loadingBarBack.BackgroundColor3 = Color3.fromRGB(60, 15, 18)
 loadingBarBack.BorderSizePixel = 0
 loadingBarBack.Parent = loadingBackground
 
@@ -196,7 +196,7 @@ loadingBarCorner.Parent = loadingBarBack
 
 local loadingBar = Instance.new("Frame")
 loadingBar.Size = UDim2.new(0, 0, 1, 0)
-loadingBar.BackgroundColor3 = Color3.fromRGB(255, 130, 175)
+loadingBar.BackgroundColor3 = Color3.fromRGB(220, 30, 40)
 loadingBar.BorderSizePixel = 0
 loadingBar.Parent = loadingBarBack
 
@@ -231,7 +231,7 @@ task.wait(1.7)
 --==================================================*
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "MICAHFXGunCustomizer"
+gui.Name = "REDBEEFXGunCustomizer"
 gui.ResetOnSpawn = false
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = player:WaitForChild("PlayerGui")
@@ -240,7 +240,7 @@ local main = Instance.new("Frame")
 main.Name = "Main"
 main.Size = UDim2.fromOffset(360, 390)
 main.Position = UDim2.new(0.5, -180, 0.5, -195)
-main.BackgroundColor3 = Color3.fromRGB(255, 239, 247)
+main.BackgroundColor3 = Color3.fromRGB(28, 6, 8)
 main.BorderSizePixel = 0
 main.Parent = gui
 
@@ -249,7 +249,7 @@ mainCorner.CornerRadius = UDim.new(0, 18)
 mainCorner.Parent = main
 
 local mainStroke = Instance.new("UIStroke")
-mainStroke.Color = Color3.fromRGB(255, 170, 200)
+mainStroke.Color = Color3.fromRGB(200, 20, 30)
 mainStroke.Thickness = 2
 mainStroke.Parent = main
 
@@ -260,7 +260,7 @@ mainStroke.Parent = main
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, -20, 0, 58)
 header.Position = UDim2.fromOffset(10, 10)
-header.BackgroundColor3 = Color3.fromRGB(245, 116, 160)
+header.BackgroundColor3 = Color3.fromRGB(190, 15, 25)
 header.BorderSizePixel = 0
 header.Parent = main
 
@@ -272,7 +272,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -65, 1, 0)
 title.Position = UDim2.fromOffset(17, 0)
 title.BackgroundTransparency = 1
-title.Text = "MICAHFX"
+title.Text = "RED BEE FX"
 title.TextColor3 = WHITE
 title.Font = Enum.Font.GothamBlack
 title.TextSize = 22
@@ -284,7 +284,7 @@ subtitle.Size = UDim2.new(1, -80, 0, 18)
 subtitle.Position = UDim2.fromOffset(18, 33)
 subtitle.BackgroundTransparency = 1
 subtitle.Text = "GUN CUSTOMIZER"
-subtitle.TextColor3 = Color3.fromRGB(255, 225, 237)
+subtitle.TextColor3 = Color3.fromRGB(255, 170, 170)
 subtitle.Font = Enum.Font.GothamBold
 subtitle.TextSize = 9
 subtitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -293,8 +293,8 @@ subtitle.Parent = header
 local closeButton = Instance.new("TextButton")
 closeButton.Size = UDim2.fromOffset(36, 36)
 closeButton.Position = UDim2.new(1, -44, 0.5, -18)
-closeButton.BackgroundColor3 = Color3.fromRGB(255, 173, 201)
-closeButton.Text = "×"
+closeButton.BackgroundColor3 = Color3.fromRGB(120, 8, 14)
+closeButton.Text = "Ã—"
 closeButton.TextColor3 = WHITE
 closeButton.Font = Enum.Font.GothamBold
 closeButton.TextSize = 24
@@ -368,7 +368,7 @@ end)
 local currentBox = Instance.new("Frame")
 currentBox.Size = UDim2.new(1, -20, 0, 72)
 currentBox.Position = UDim2.fromOffset(10, 78)
-currentBox.BackgroundColor3 = Color3.fromRGB(255, 211, 227)
+currentBox.BackgroundColor3 = Color3.fromRGB(55, 10, 14)
 currentBox.BorderSizePixel = 0
 currentBox.Parent = main
 
@@ -381,7 +381,7 @@ currentTitle.Size = UDim2.new(1, -20, 0, 22)
 currentTitle.Position = UDim2.fromOffset(10, 7)
 currentTitle.BackgroundTransparency = 1
 currentTitle.Text = "CURRENT STYLE"
-currentTitle.TextColor3 = Color3.fromRGB(125, 75, 95)
+currentTitle.TextColor3 = Color3.fromRGB(255, 120, 120)
 currentTitle.Font = Enum.Font.GothamBold
 currentTitle.TextSize = 10
 currentTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -392,7 +392,7 @@ currentStyle.Size = UDim2.new(1, -20, 0, 32)
 currentStyle.Position = UDim2.fromOffset(10, 29)
 currentStyle.BackgroundTransparency = 1
 currentStyle.Text = "NORMAL"
-currentStyle.TextColor3 = Color3.fromRGB(125, 75, 95)
+currentStyle.TextColor3 = Color3.fromRGB(255, 120, 120)
 currentStyle.Font = Enum.Font.GothamBlack
 currentStyle.TextSize = 19
 currentStyle.TextXAlignment = Enum.TextXAlignment.Left
@@ -432,28 +432,28 @@ local styleButton = makeButton(
     "StyleButton",
     "SELECT STYLE: NORMAL",
     UDim2.fromOffset(10, 160),
-    Color3.fromRGB(170, 145, 158)
+    Color3.fromRGB(95, 20, 25)
 )
 
 local applyButton = makeButton(
     "ApplyButton",
     "APPLY TO NEAREST GUNDISPLAY",
     UDim2.fromOffset(10, 206),
-    Color3.fromRGB(244, 133, 171)
+    Color3.fromRGB(220, 30, 40)
 )
 
 local resetButton = makeButton(
     "ResetButton",
     "RESET TO NORMAL",
     UDim2.fromOffset(10, 252),
-    Color3.fromRGB(170, 145, 158)
+    Color3.fromRGB(95, 20, 25)
 )
 
 local keybindButton = makeButton(
     "KeybindButton",
     "HIDE UI: RIGHTSHIFT",
     UDim2.fromOffset(10, 298),
-    Color3.fromRGB(214, 120, 155)
+    Color3.fromRGB(150, 15, 22)
 )
 
 --==================================================*
@@ -465,7 +465,7 @@ status.Size = UDim2.new(1, -20, 0, 28)
 status.Position = UDim2.fromOffset(10, 348)
 status.BackgroundTransparency = 1
 status.Text = "Ready."
-status.TextColor3 = Color3.fromRGB(120, 80, 96)
+status.TextColor3 = Color3.fromRGB(230, 140, 140)
 status.Font = Enum.Font.Gotham
 status.TextSize = 11
 status.TextXAlignment = Enum.TextXAlignment.Center
@@ -479,7 +479,7 @@ local picker = Instance.new("Frame")
 picker.Name = "StylePicker"
 picker.Size = UDim2.fromOffset(260, 245)
 picker.Position = UDim2.new(0.5, -130, 0.5, -122)
-picker.BackgroundColor3 = Color3.fromRGB(255, 239, 247)
+picker.BackgroundColor3 = Color3.fromRGB(28, 6, 8)
 picker.BorderSizePixel = 0
 picker.Visible = false
 picker.ZIndex = 20
@@ -490,7 +490,7 @@ pickerCorner.CornerRadius = UDim.new(0, 14)
 pickerCorner.Parent = picker
 
 local pickerStroke = Instance.new("UIStroke")
-pickerStroke.Color = Color3.fromRGB(255, 170, 200)
+pickerStroke.Color = Color3.fromRGB(200, 20, 30)
 pickerStroke.Thickness = 2
 pickerStroke.Parent = picker
 
@@ -499,7 +499,7 @@ pickerTitle.Size = UDim2.new(1, -20, 0, 35)
 pickerTitle.Position = UDim2.fromOffset(10, 5)
 pickerTitle.BackgroundTransparency = 1
 pickerTitle.Text = "SELECT STYLE"
-pickerTitle.TextColor3 = Color3.fromRGB(125, 75, 95)
+pickerTitle.TextColor3 = Color3.fromRGB(255, 120, 120)
 pickerTitle.Font = Enum.Font.GothamBlack
 pickerTitle.TextSize = 15
 pickerTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -509,8 +509,8 @@ pickerTitle.Parent = picker
 local pickerClose = Instance.new("TextButton")
 pickerClose.Size = UDim2.fromOffset(30, 30)
 pickerClose.Position = UDim2.new(1, -38, 0, 7)
-pickerClose.BackgroundColor3 = Color3.fromRGB(245, 116, 160)
-pickerClose.Text = "×"
+pickerClose.BackgroundColor3 = Color3.fromRGB(190, 15, 25)
+pickerClose.Text = "Ã—"
 pickerClose.TextColor3 = WHITE
 pickerClose.Font = Enum.Font.GothamBold
 pickerClose.TextSize = 19
@@ -526,10 +526,10 @@ local pickerScroll = Instance.new("ScrollingFrame")
 pickerScroll.Name = "StyleScroll"
 pickerScroll.Size = UDim2.new(1, -20, 1, -50)
 pickerScroll.Position = UDim2.fromOffset(10, 45)
-pickerScroll.BackgroundColor3 = Color3.fromRGB(255, 225, 237)
+pickerScroll.BackgroundColor3 = Color3.fromRGB(45, 8, 11)
 pickerScroll.BorderSizePixel = 0
 pickerScroll.ScrollBarThickness = 5
-pickerScroll.ScrollBarImageColor3 = Color3.fromRGB(245, 116, 160)
+pickerScroll.ScrollBarImageColor3 = Color3.fromRGB(200, 20, 30)
 pickerScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 pickerScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 pickerScroll.ZIndex = 21
@@ -559,62 +559,62 @@ pickerPadding.Parent = pickerScroll
 local function getStyleColor(styleName)
 
     if styleName == "Normal" then
-        return Color3.fromRGB(170, 145, 158)
+        return Color3.fromRGB(95, 20, 25)
 
     elseif styleName == "RedScope" then
-        return Color3.fromRGB(200, 55, 70)
+        return Color3.fromRGB(220, 30, 40)
 
     elseif styleName == "BlueScope" then
-        return Color3.fromRGB(45, 75, 160)
+        return Color3.fromRGB(160, 25, 45)
 
     elseif styleName == "Purple" then
-        return Color3.fromRGB(135, 55, 190)
+        return Color3.fromRGB(130, 15, 35)
 
     elseif styleName == "VoidScope" then
-        return Color3.fromRGB(80, 80, 85)
+        return Color3.fromRGB(70, 10, 15)
 
     elseif styleName == "Rosescope" then
-        return Color3.fromRGB(225, 95, 155)
+        return Color3.fromRGB(190, 40, 60)
 
     elseif styleName == "WhiteScope" then
-        return Color3.fromRGB(120, 120, 125)
+        return Color3.fromRGB(150, 50, 55)
 
     elseif styleName == "GhostScope" then
-        return Color3.fromRGB(135, 135, 140)
+        return Color3.fromRGB(110, 30, 35)
     end
 
-    return Color3.fromRGB(170, 145, 158)
+    return Color3.fromRGB(95, 20, 25)
 
 end
 
 local function getTextColor(styleName)
 
     if styleName == "Normal" then
-        return Color3.fromRGB(125, 75, 95)
+        return Color3.fromRGB(255, 120, 120)
 
     elseif styleName == "RedScope" then
-        return Color3.fromRGB(190, 30, 45)
+        return Color3.fromRGB(255, 90, 90)
 
     elseif styleName == "BlueScope" then
-        return Color3.fromRGB(35, 65, 150)
+        return Color3.fromRGB(255, 110, 120)
 
     elseif styleName == "Purple" then
-        return Color3.fromRGB(125, 40, 185)
+        return Color3.fromRGB(255, 100, 110)
 
     elseif styleName == "VoidScope" then
-        return Color3.fromRGB(75, 75, 80)
+        return Color3.fromRGB(255, 130, 130)
 
     elseif styleName == "Rosescope" then
-        return Color3.fromRGB(225, 75, 145)
+        return Color3.fromRGB(255, 120, 140)
 
     elseif styleName == "WhiteScope" then
-        return Color3.fromRGB(75, 75, 75)
+        return Color3.fromRGB(255, 150, 150)
 
     elseif styleName == "GhostScope" then
-        return Color3.fromRGB(80, 80, 85)
+        return Color3.fromRGB(255, 135, 135)
     end
 
-    return Color3.fromRGB(125, 75, 95)
+    return Color3.fromRGB(255, 120, 120)
 
 end
 
@@ -1282,9 +1282,9 @@ local function applyStyleToGun(tool)
 
     status.Text =
         CURRENT_STYLE
-        .. " applied • "
+        .. " applied â€¢ "
         .. textures
-        .. " textures • "
+        .. " textures â€¢ "
         .. effects
         .. " effects"
 
@@ -1426,7 +1426,7 @@ local function resetToNormal()
     updateStyleUI()
 
     status.Text =
-        "NORMAL • Original color restored."
+        "NORMAL â€¢ Original color restored."
 
 end
 
@@ -1477,7 +1477,7 @@ local function selectStyle(styleName)
     if CURRENT_STYLE == "Normal" then
 
         status.Text =
-            "NORMAL • Original color restored."
+            "NORMAL â€¢ Original color restored."
 
         return
 
@@ -1512,7 +1512,7 @@ local function selectStyle(styleName)
 
         status.Text =
             CURRENT_STYLE
-            .. " selected • "
+            .. " selected â€¢ "
             .. math.floor(distance)
             .. " studs"
 
@@ -1674,7 +1674,7 @@ applyButton.MouseButton1Click:Connect(
         status.Text =
             "Applied "
             .. CURRENT_STYLE
-            .. " • "
+            .. " â€¢ "
             .. math.floor(distance)
             .. " studs"
 
@@ -1827,7 +1827,7 @@ local function setupTool(tool)
             else
 
                 status.Text =
-                    "Gun equipped • NORMAL"
+                    "Gun equipped â€¢ NORMAL"
 
             end
 
@@ -1842,14 +1842,14 @@ local function setupTool(tool)
                 restoreGun(tool)
 
                 status.Text =
-                    "Gun unequipped • GhostScope remains on GunDisplay."
+                    "Gun unequipped â€¢ GhostScope remains on GunDisplay."
 
             else
 
                 restoreGun(tool)
 
                 status.Text =
-                    "Gun unequipped • "
+                    "Gun unequipped â€¢ "
                     .. CURRENT_STYLE
 
             end
@@ -2010,7 +2010,7 @@ workspace.DescendantAdded:Connect(
                 )
 
                 status.Text =
-                    "New GunDisplay • "
+                    "New GunDisplay â€¢ "
                     .. CURRENT_STYLE
 
             end
@@ -2065,11 +2065,7 @@ mobileButton.Position =
     )
 
 mobileButton.BackgroundColor3 =
-    Color3.fromRGB(
-        245,
-        116,
-        160
-    )
+    Color3.fromRGB(190, 15, 25)
 
 mobileButton.BorderSizePixel = 0
 
@@ -2183,7 +2179,7 @@ keybindButton.MouseButton1Click:Connect(
             "PRESS A KEY..."
 
         status.Text =
-            "Press a key • ESC to cancel"
+            "Press a key â€¢ ESC to cancel"
 
     end
 )
@@ -2300,17 +2296,17 @@ loadingGui:Destroy()
 --==================================================*
 
 print("========================================")
-print("[MICAHFX] Gun Customizer Loaded")
-print("[MICAHFX] Local-only system")
-print("[MICAHFX] Starting Style: Normal")
-print("[MICAHFX] RedScope:", RED_TEXTURE_ID)
-print("[MICAHFX] BlueScope:", BLUE_TEXTURE_ID)
-print("[MICAHFX] Purple:", PURPLE_TEXTURE_ID)
-print("[MICAHFX] VoidScope: WHITE -> BLACK")
-print("[MICAHFX] Rosescope: PINK")
-print("[MICAHFX] WhiteScope: WHITE")
-print("[MICAHFX] GhostScope: GUNDISPLAY / NO TEXTURE / WHITE / 50%")
-print("[MICAHFX] GhostScope also applies to equipped Gun")
-print("[MICAHFX] All scopes use nearest GunDisplay")
-print("[MICAHFX] Hide Key:", hideKey.Name)
+print("[RED BEE FX] Gun Customizer Loaded")
+print("[RED BEE FX] Local-only system")
+print("[RED BEE FX] Starting Style: Normal")
+print("[RED BEE FX] RedScope:", RED_TEXTURE_ID)
+print("[RED BEE FX] BlueScope:", BLUE_TEXTURE_ID)
+print("[RED BEE FX] Purple:", PURPLE_TEXTURE_ID)
+print("[RED BEE FX] VoidScope: WHITE -> BLACK")
+print("[RED BEE FX] Rosescope: PINK")
+print("[RED BEE FX] WhiteScope: WHITE")
+print("[RED BEE FX] GhostScope: GUNDISPLAY / NO TEXTURE / WHITE / 50%")
+print("[RED BEE FX] GhostScope also applies to equipped Gun")
+print("[RED BEE FX] All scopes use nearest GunDisplay")
+print("[RED BEE FX] Hide Key:", hideKey.Name)
 print("========================================")

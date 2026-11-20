@@ -1,0 +1,2607 @@
+-- ============================================================
+-- VANTIXHUB — Full script
+-- + FUN tab: Auto Goal (LOOP/SINGLE, auto-detects goal), Goal Trainer,
+--   Freeze Ball (with network-owner fix), Delete Ball
+-- ============================================================
+
+local CTN_NO_VIRTUALIZE = CTN_NO_VIRTUALIZE or function(f) return f end
+local CTN_INLINE = CTN_INLINE or function(f) return f end
+local CTN_JIT = CTN_JIT or function(f) return f end
+
+warn("[VantixHub] booting...")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+local TPS = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local nc = newcclosure or function(f) return f end
+local unpackFn = table.unpack or unpack
+
+local AB_MODE_LIST = {"Random Aim","Precise","Furthest Corner","Center","Top Right","Top Left","Bottom Right","Bottom Left"}
+local AB_PRECISE_DOTS = {}
+
+local S = {
+    AB_TARGET_MODE="Random Aim", AB_DEBUG=false,
+    BASE_REACH=4.6, baseEnabled=false, TOGGLE_REACH=4.5, toggleHBEEnabled=false,
+    SNEAKY_ACTIVE=false, SNEAKY_REACH=4.7, SNEAKY_BUFFER=0.9, SNEAKY_HITBOX_DROP=-0.2,
+    GK_AUTO_ON=false, GK_GROUNDSAVE_ON=false, GK_EMERGENCY_ADD=0.4, GK_REACH=5.4,
+    GK_DIVE_SPEED=26, GK_JUMP_REACT=0.40, GK_SAVE_REACT=1.70,
+}
+local AP = {enabled=false, mode="POSITION", targetName=nil, position="LW", autoVelocity=true, spinEnabled=false, blacklist={}, outlineTarget=false, teammatesOnly=true}
+local V = {hairId="DEFAULT", shirtNum="", shirtName="", rankBypassEnabled=false}
+local GLOVE = {enabled=false, material="Neon", colors={LeftGlove="White",RightGlove="White",LeftShoe="White",RightShoe="White"}}
+local STREAMER = {active=false}
+local WIDGET_SCALE = 1.0
+
+local GOLD_MIX = Color3.fromRGB(255,199,64)
+local BLACK_MIX = Color3.fromRGB(15,15,20)
+
+local ESP_CONFIG = {enabled=false, transparency=0.45}
+local TRAIL_CONFIG = {enabled=false, lifetime=2.0}
+
+local TRAIL_COLOR_SEQ = ColorSequence.new(GOLD_MIX)
+
+local RC = getgenv().ReachConfig or {
+    enabled=false, range=4.6, priorityEnabled=false,
+    magnetActive=true, holdDistance=1.5, maxStep=2.0
+}
+getgenv().ReachConfig = RC
+
+getgenv().AutoJuggleV1 = getgenv().AutoJuggleV1 or {enabled=false, reach=4.5, pullOffset=0.153, alignMod=0.45, baseDynamic=1.1, minSpeed=1.2, maxSpeed=2.5}
+if getgenv().AutoJuggleV1.reach == nil then getgenv().AutoJuggleV1.reach = 4.5 end
+local rankBypassCfg = getgenv().RankBypass or {enabled=false}
+getgenv().RankBypass = rankBypassCfg
+local redirectVelToPlayer
+local cachedPassTarget, cachedPassChar = nil, nil
+
+local ReachSystem = {
+    REACH=4.2, REACH_BUFFER=0.85, SPOOF=2.55, MIN_GRIP=2.45, BLEND_BAND=1.6,
+    PRIORITY=9e18, UNTACKLABLE=true, TOUCH_DENY_R=7.0, BALL_SPEED=0.96,
+    HEIGHT_LIFT=0.42, FORWARD_PUSH=0.32, FACING_THRESH=0.10,
+    torso=nil, ball=nil, hookedTouch=nil, hookedClosest=nil, hookedPriority=nil,
+}
+
+local globalIsContested = false
+local Vector3_new = Vector3.new
+
+local SPOOFABLE_PARTS = {
+    ["Head"] = true, ["HumanoidRootPart"] = true, ["UpperTorso"] = true, ["LowerTorso"] = true,
+    ["Torso"] = true, ["Right Arm"] = true, ["Left Arm"] = true, ["Right Leg"] = true, ["Left Leg"] = true,
+    ["RightHand"] = true, ["LeftHand"] = true, ["RightFoot"] = true, ["LeftFoot"] = true,
+    ["RightLowerArm"] = true, ["LeftLowerArm"] = true, ["RightUpperArm"] = true, ["LeftUpperArm"] = true,
+    ["RightLowerLeg"] = true, ["LeftLowerLeg"] = true, ["RightUpperLeg"] = true, ["LeftUpperLeg"] = true,
+}
+
+local isReachEnabled = CTN_JIT(function() return S.baseEnabled or S.toggleHBEEnabled end)
+local getActiveReach = CTN_JIT(function()
+    if S.toggleHBEEnabled then return S.TOGGLE_REACH end
+    if S.baseEnabled then return S.BASE_REACH end
+    return 0
+end)
+local hasBallSoftener = CTN_JIT(function()
+    return S.baseEnabled or S.toggleHBEEnabled or getgenv().AutoJuggleV1.enabled
+end)
+local isAnyReachFeatureOn = CTN_JIT(function()
+    return S.baseEnabled or S.toggleHBEEnabled or S.SNEAKY_ACTIVE or getgenv().AutoJuggleV1.enabled
+end)
+
+local reachGetTorso = CTN_JIT(function(char)
+    char = char or player.Character
+    if not char then return nil end
+    return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+end)
+local reachRefreshTorso = CTN_JIT(function()
+    if not (ReachSystem.torso and ReachSystem.torso.Parent) then ReachSystem.torso = reachGetTorso() end
+end)
+if player.Character then ReachSystem.torso = reachGetTorso() end
+player.CharacterAdded:Connect(function(char) task.wait(0.15); ReachSystem.torso = reachGetTorso(char) end)
+task.spawn(function()
+    local ok, field = pcall(function() return workspace:WaitForChild("FootballField", 60) end)
+    if not ok or not field then return end
+    ReachSystem.ball = field:FindFirstChild("SoccerBall")
+    field.ChildAdded:Connect(function(c) if c.Name == "SoccerBall" then ReachSystem.ball = c end end)
+    field.ChildRemoved:Connect(function(c) if c == ReachSystem.ball then ReachSystem.ball = nil end end)
+end)
+local reachBallAlive = CTN_JIT(function() return ReachSystem.ball and ReachSystem.ball.Parent end)
+local reachCharOf = CTN_JIT(function(part)
+    if typeof(part) ~= "Instance" then return nil end
+    local p = part.Parent; while p and not p:IsA("Model") do p = p.Parent end; return p
+end)
+local reachIsOtherPlayerPart = CTN_JIT(function(part)
+    local char = reachCharOf(part); if not char then return false end
+    local plr = Players:GetPlayerFromCharacter(char); return plr ~= nil and plr ~= player
+end)
+local reachWithinDenyRange = CTN_JIT(function()
+    if not (reachBallAlive() and ReachSystem.torso) then return false end
+    return (ReachSystem.torso.CFrame.Position - ReachSystem.ball.CFrame.Position).Magnitude <= ReachSystem.TOUCH_DENY_R
+end)
+task.spawn(function()
+    task.wait(2)
+    local gc, isL, hookF = getgc or get_gc, islclosure or is_l_closure, hookfunction or hookfunc
+    if not (gc and isL and hookF) then return end
+    local info = debug and debug.getinfo; if not info then return end
+    local function tryHookTouch(v)
+        local orig
+        local ok = pcall(function()
+            orig = hookF(v, nc(CTN_NO_VIRTUALIZE(function(...)
+                pcall(reachRefreshTorso)
+                if isAnyReachFeatureOn() and ReachSystem.UNTACKLABLE and reachWithinDenyRange() then
+                    local n = select("#", ...)
+                    for idx = 1, n do if reachIsOtherPlayerPart((select(idx, ...))) then return nil end end
+                end
+                if not orig then return nil end
+                local ok2, ret = pcall(orig, ...); if ok2 then return ret end
+            end)))
+        end)
+        return ok and orig
+    end
+    local function tryHookClosest(v)
+        local orig
+        local ok = pcall(function()
+            orig = hookF(v, nc(CTN_NO_VIRTUALIZE(function(...)
+                if isAnyReachFeatureOn() and reachBallAlive() then return player.Name end
+                if orig then return orig(...) end
+            end)))
+        end)
+        return ok and orig
+    end
+    local function tryHookPriority(v)
+        local orig
+        local ok = pcall(function()
+            orig = hookF(v, nc(CTN_NO_VIRTUALIZE(function(...)
+                if orig then pcall(orig, ...) end
+                if isAnyReachFeatureOn() and reachBallAlive() then return ReachSystem.PRIORITY end
+                return 0
+            end)))
+        end)
+        return ok and orig
+    end
+    local function install()
+        local needT, needC, needP = not ReachSystem.hookedTouch, not ReachSystem.hookedClosest, not ReachSystem.hookedPriority
+        if not (needT or needC or needP) then return true end
+        local snap; pcall(function() snap = gc() end); if not snap then return false end
+        for _, v in pairs(snap) do
+            if not (needT or needC or needP) then break end
+            if type(v) == "function" and isL(v) then
+                local ok, i = pcall(info, v)
+                if ok and i then
+                    local name = i.name
+                    if needT and name == "touchDetect" then
+                        if tryHookTouch(v) then ReachSystem.hookedTouch = v; needT = false end
+                    elseif needC and name == "getClosestPlayerName" then
+                        if tryHookClosest(v) then ReachSystem.hookedClosest = v; needC = false end
+                    elseif needP and (name == "getPriority" or name == "calculatePriority" or name == "getPlayerPriority" or name == "getBallPriority" or name == "getPriorityValue" or name == "computePriority" or name == "getTouchPriority") then
+                        if tryHookPriority(v) then ReachSystem.hookedPriority = v; needP = false end
+                    end
+                end
+            end
+        end
+        return (not (needT or needC or needP))
+    end
+    for _ = 1, 10 do
+        local done = pcall(install)
+        if done and ReachSystem.hookedTouch and ReachSystem.hookedClosest and ReachSystem.hookedPriority then break end
+        task.wait(0.8)
+    end
+end)
+
+local C = {
+    BG=Color3.fromRGB(9,13,22), PANEL=Color3.fromRGB(13,19,33), CARD=Color3.fromRGB(18,27,46),
+    FIELD=Color3.fromRGB(24,38,64), BORDER=Color3.fromRGB(198,160,60), TRACK=Color3.fromRGB(6,10,18),
+    TEXT=Color3.fromRGB(247,241,220), MUTED=Color3.fromRGB(140,150,170),
+    ACCENT=Color3.fromRGB(255,199,64), DANGER=Color3.fromRGB(220,110,120),
+    GLOW=Color3.fromRGB(90,160,255), BLUE=Color3.fromRGB(30,110,255),
+    SUCCESS=Color3.fromRGB(110,220,180),
+    WIDGET_TOP=Color3.fromRGB(20,36,46),
+    W_SNEAKY=Color3.fromRGB(100,210,200), W_JUGGLE=Color3.fromRGB(255,130,140),
+    W_GK=Color3.fromRGB(130,210,170), W_AIM=Color3.fromRGB(240,170,130),
+    W_TOGGLE=Color3.fromRGB(140,200,220), W_PASST=Color3.fromRGB(120,220,180),
+    POST=Color3.fromRGB(240,235,220), GRASS=Color3.fromRGB(50,130,55),
+    NET_LINE=Color3.fromRGB(200,220,240), GOAL_SKY=Color3.fromRGB(8,16,28),
+}
+local LOCK_ICON = "\240\159\148\146"
+local UNLOCK_ICON = "\240\159\148\147"
+local COLOR_NAMES = {"White","Black","Red","Green","Blue","Cyan","Magenta","Yellow","Orange","Purple","Pink","Lime","Gray"}
+local COLOR_MAP = {
+    White=Color3.fromRGB(255,255,255),Black=Color3.fromRGB(20,20,20),Red=Color3.fromRGB(255,40,40),
+    Green=Color3.fromRGB(40,220,80),Blue=Color3.fromRGB(60,120,255),Cyan=Color3.fromRGB(80,220,240),
+    Magenta=Color3.fromRGB(240,60,240),Yellow=Color3.fromRGB(255,220,60),Orange=Color3.fromRGB(255,140,60),
+    Purple=Color3.fromRGB(180,110,240),Pink=Color3.fromRGB(255,140,200),Lime=Color3.fromRGB(180,255,80),
+    Gray=Color3.fromRGB(140,140,140)
+}
+local HAIR_FRIENDLY_TO_ID = {
+    ["Default Hair"]="DEFAULT",Bacon="HairBacon",Black="HairBlack",["Black Mask"]="HairBlackMask",
+    Blonde="HairBlonde",Bold="HairBold",Brown="HairBrown",Cap="HairCap",Charmer="HairCharmer",
+    Cool="HairCool",Dio="HairDio",Egg="HairEgg",Floof="HairFloof",Fluffed="HairFluffed",
+    Green="HairGreen",Halloween="HairHalloween",Hat="HairHat",["Hockey Mask"]="HairHockeyMask",
+    Knot="HairKnot",["Long Pink"]="HairLongPink",Messy="HairMessy",Nerd="HairNerd"
+}
+
+local FIELD_COLOR_OPTIONS = {"Orginal","Default","Gold","Red","Blue","Purple","Black","White","Pink","Orange","Cyan"}
+local FIELD_COLOR_MAP = {
+    Default=Color3.fromRGB(50,140,50), Gold=Color3.fromRGB(198,160,60), Red=Color3.fromRGB(140,30,30),
+    Blue=Color3.fromRGB(30,30,140), Purple=Color3.fromRGB(100,30,140), Black=Color3.fromRGB(20,20,20),
+    White=Color3.fromRGB(200,200,200), Pink=Color3.fromRGB(200,100,150), Orange=Color3.fromRGB(200,120,30),
+    Cyan=Color3.fromRGB(30,180,180),
+}
+local cachedFieldParts = {}
+local orginalFieldColors = {}
+local function cacheFieldParts()
+    table.clear(cachedFieldParts)
+    local field = Workspace:FindFirstChild("FootballField") or Workspace
+    for _, part in ipairs(field:GetDescendants()) do
+        if part:IsA("BasePart") then
+            local n = part.Name:lower()
+            if n:find("grass") or n:find("field") or n:find("ground") then
+                table.insert(cachedFieldParts, part)
+                if orginalFieldColors[part] == nil then
+                    orginalFieldColors[part] = part.Color
+                end
+            end
+        end
+    end
+end
+cacheFieldParts()
+
+if _G._vantix_ab_conns then for _, c in ipairs(_G._vantix_ab_conns) do pcall(function() c:Disconnect() end) end end
+_G._vantix_ab_conns = {}
+local function Bind(c) table.insert(_G._vantix_ab_conns, c); return c end
+if _G._vantix_ab_oldNamecall then pcall(function() hookmetamethod(game, "__namecall", _G._vantix_ab_oldNamecall) end); _G._vantix_ab_oldNamecall = nil end
+if _G._vantix_ab_oldIndex then pcall(function() hookmetamethod(game, "__index", _G._vantix_ab_oldIndex) end); _G._vantix_ab_oldIndex = nil end
+for _, obj in ipairs(playerGui:GetChildren()) do
+    if obj.Name == "VantixAimbotTest" or obj.Name == "VantixHubWidgets" then pcall(function() obj:Destroy() end) end
+end
+
+-- ═══ BALL SMOOTHER (BallTime) ═══
+getgenv().BallTimeConfig = getgenv().BallTimeConfig or { enabled = false, multiplier = 1.3 }
+local BallTimeCfg = getgenv().BallTimeConfig
+getgenv()._BallTimeOffset   = getgenv()._BallTimeOffset   or 0
+getgenv()._BallTimeSuppress = getgenv()._BallTimeSuppress or false
+local _btRealTick   = tick
+local _btLastReal   = _btRealTick()
+local _btWasEnabled = false
+Bind(RunService.RenderStepped:Connect(CTN_NO_VIRTUALIZE(function()
+    local now = _btRealTick()
+    local dt  = now - _btLastReal
+    _btLastReal = now
+    if BallTimeCfg.enabled then
+        if not getgenv()._BallTimeSuppress then
+            getgenv()._BallTimeOffset = getgenv()._BallTimeOffset + dt * (BallTimeCfg.multiplier - 1)
+        end
+        _btWasEnabled = true
+    elseif _btWasEnabled then
+        _btWasEnabled = false
+    end
+end)))
+if not getgenv()._BallTimeHooked then
+    getgenv()._BallTimeHooked = true
+    pcall(function()
+        local oldTick
+        oldTick = hookfunction(tick, nc(CTN_NO_VIRTUALIZE(function(...)
+            local off = getgenv()._BallTimeOffset or 0
+            if getgenv()._BallTimeSuppress or off == 0 then return oldTick(...) end
+            local fenv = getfenv
+            if fenv then
+                local e2 = fenv(2)
+                if e2 and e2.script and e2.script.Name == "BallHandler" then return oldTick(...) + off end
+                local e3 = fenv(3)
+                if e3 and e3.script and e3.script.Name == "BallHandler" then return oldTick(...) + off end
+            end
+            return oldTick(...)
+        end)))
+    end)
+end
+
+local aimbotConfig = {enabled=false, randomAim=false, goal="B", corner="Center", furthestCorner=false, gravity=55, maxPower=90, minKickPower=15, autoDetectGoal=true, curveEnabled=false, curvePower=15, topCornerMode=false}
+local goalLocations = {A = Vector3.new(-313.13, 8.5, 92.8), B = Vector3.new(-115.936, 8.5, 92.8)}
+local targetOffsets = {Center=Vector3.new(0,5,0),TopRight=Vector3.new(0,6,12),TopLeft=Vector3.new(0,6,-12),BottomRight=Vector3.new(0,-6,12),BottomLeft=Vector3.new(0,-6,-12)}
+local AB_SAFE_Z_MIN, AB_SAFE_Z_MAX = 80.536, 105.215
+local AB_SAFE_Y_MIN, AB_SAFE_Y_MAX = 7.5, 15.0
+local getOffsetForGoal = CTN_JIT(function(mode, goalKey)
+    local off = targetOffsets[mode] or targetOffsets["Center"]
+    if goalKey == "A" then return Vector3.new(off.X, off.Y, -off.Z) end
+    return off
+end)
+
+local lastCacheCheck, cachedBall = 0, nil
+local getBall = CTN_JIT(function() return cachedBall end)
+local updateBallCache = CTN_JIT(function()
+    local now = os.clock()
+    if now - lastCacheCheck > 0.3 then
+        lastCacheCheck = now
+        local field = Workspace:FindFirstChild("FootballField")
+        local searchFolder = field or Workspace; local validBall = nil
+        for _, obj in ipairs(searchFolder:GetChildren()) do
+            local name = obj.Name:lower()
+            if name:find("ball") or name:find("soccer") or name:find("football") then
+                local bPart = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart")
+                if bPart and bPart.Transparency < 1 and not bPart.Anchored then validBall = bPart; break end
+            end
+        end
+        cachedBall = validBall
+    end
+end)
+
+local cachedGoalParts, lastAimbotBall = {}, nil
+local detectEnemyGoal = CTN_JIT(function()
+    local myColor = nil
+    if player.Team then myColor = player.TeamColor end
+    if not myColor and player.Character then
+        local torso = player.Character:FindFirstChild("Torso") or player.Character:FindFirstChild("UpperTorso")
+        if torso and torso:IsA("BasePart") then myColor = torso.BrickColor end
+    end
+    if not myColor then return aimbotConfig.goal end
+    local ball = getBall(); if not ball then return aimbotConfig.goal end
+    if ball ~= lastAimbotBall then cachedGoalParts = {}; lastAimbotBall = ball end
+    if #cachedGoalParts == 0 then
+        local searchArea = Workspace:FindFirstChild("FootballField") and Workspace.FootballField:GetDescendants() or Workspace:GetDescendants()
+        for _, part in ipairs(searchArea) do
+            if part:IsA("BasePart") and part.Transparency < 1 then
+                local name = part.Name:lower()
+                local parentName = part.Parent and part.Parent.Name:lower() or ""
+                if name:find("goal") or name:find("post") or parentName:find("goal") then
+                    if part.BrickColor.Name ~= "Institutional white" and part.BrickColor.Name ~= "White" and part.BrickColor.Name ~= "Medium stone grey" then
+                        table.insert(cachedGoalParts, part)
+                    end
+                end
+            end
+        end
+    end
+    local colorA, colorB = nil, nil
+    local distA_min, distB_min = 40, 40
+    for _, part in ipairs(cachedGoalParts) do
+        if part and part.Parent then
+            local distA = (part.Position - goalLocations.A).Magnitude
+            local distB = (part.Position - goalLocations.B).Magnitude
+            if distA < distA_min then distA_min = distA; colorA = part.BrickColor
+            elseif distB < distB_min then distB_min = distB; colorB = part.BrickColor end
+        else cachedGoalParts = {}; return aimbotConfig.goal end
+    end
+    if colorA and colorA == myColor then return "B" end
+    if colorB and colorB == myColor then return "A" end
+    if colorA and colorA ~= myColor then return "A" end
+    if colorB and colorB ~= myColor then return "B" end
+    return aimbotConfig.goal
+end)
+local updateGoal = CTN_JIT(function() if aimbotConfig.autoDetectGoal then aimbotConfig.goal = detectEnemyGoal() end end)
+task.spawn(function() while task.wait(5) do updateGoal() end end)
+updateGoal()
+Bind(player:GetPropertyChangedSignal("Team"):Connect(updateGoal))
+Bind(player:GetPropertyChangedSignal("TeamColor"):Connect(updateGoal))
+
+local calculateShot = CTN_JIT(function(startPosition)
+    local targetPos, offsetHeight, isCorner = nil, 0, false
+    if aimbotConfig.randomAim then
+        targetPos = goalLocations[aimbotConfig.goal] + Vector3.new(0, math.random(-1, 6), math.random(-12, 12))
+        offsetHeight = targetPos.Y - goalLocations[aimbotConfig.goal].Y
+    elseif aimbotConfig.furthestCorner then
+        local baseGoalPos = goalLocations[aimbotConfig.goal]
+        local topRightPos = baseGoalPos + getOffsetForGoal("TopRight", aimbotConfig.goal)
+        local topLeftPos = baseGoalPos + getOffsetForGoal("TopLeft", aimbotConfig.goal)
+        if (topRightPos - startPosition).Magnitude > (topLeftPos - startPosition).Magnitude then targetPos = topRightPos else targetPos = topLeftPos end
+        offsetHeight = targetOffsets["TopRight"].Y; isCorner = true
+    else
+        local selectedOffset = getOffsetForGoal(aimbotConfig.corner, aimbotConfig.goal)
+        targetPos = goalLocations[aimbotConfig.goal] + selectedOffset
+        offsetHeight = selectedOffset.Y; isCorner = (aimbotConfig.corner ~= "Center")
+    end
+    local distToGoal = (goalLocations[aimbotConfig.goal] - startPosition).Magnitude
+    local matchedHeight = (distToGoal>150) and -1.5 or (distToGoal>120) and 0.5 or (distToGoal>80) and 2.5 or (distToGoal>50) and 3.5 or (distToGoal>30) and 1.5 or (distToGoal>15) and -2.5 or -4.0
+    local finalY
+    if aimbotConfig.topCornerMode then finalY = AB_SAFE_Y_MAX - 0.3
+    elseif isCorner then finalY = goalLocations[aimbotConfig.goal].Y + offsetHeight
+    else finalY = goalLocations[aimbotConfig.goal].Y + matchedHeight + offsetHeight end
+    finalY = math.clamp(finalY, AB_SAFE_Y_MIN, AB_SAFE_Y_MAX - 0.3)
+    targetPos = Vector3.new(targetPos.X, finalY, targetPos.Z)
+    local displacement = targetPos - startPosition
+    local flatDist = Vector3.new(displacement.X, 0, displacement.Z).Magnitude
+    local power = aimbotConfig.maxPower
+    if distToGoal>150 then power=power*1.25 elseif distToGoal>120 then power=power*1.15 elseif distToGoal>80 then power=power*1.05 elseif distToGoal>30 then power=power*0.85 else power=power*0.7 end
+    local horizontalSpeed = power*0.95
+    local airTime = math.max(flatDist/horizontalSpeed, 0.05)
+    local velY = (displacement.Y + (0.5*aimbotConfig.gravity*(airTime^2)))/airTime
+    local v = Vector3.new(displacement.X/airTime, velY, displacement.Z/airTime)
+    if v.Magnitude > power then v = v.Unit*power end
+    return v
+end)
+
+local calculateExactShot = CTN_JIT(function(startPosition, originalVelocity)
+    local targetPos, offsetHeight, isCorner = nil, 0, false
+    if aimbotConfig.randomAim then
+        targetPos = goalLocations[aimbotConfig.goal] + Vector3.new(0, math.random(-1, 6), math.random(-12, 12))
+        offsetHeight = targetPos.Y - goalLocations[aimbotConfig.goal].Y
+    elseif aimbotConfig.furthestCorner then
+        local baseGoalPos = goalLocations[aimbotConfig.goal]
+        local topRightPos = baseGoalPos + getOffsetForGoal("TopRight", aimbotConfig.goal)
+        local topLeftPos = baseGoalPos + getOffsetForGoal("TopLeft", aimbotConfig.goal)
+        if (topRightPos - startPosition).Magnitude > (topLeftPos - startPosition).Magnitude then targetPos = topRightPos else targetPos = topLeftPos end
+        offsetHeight = targetOffsets["TopRight"].Y; isCorner = true
+    else
+        local selectedOffset = getOffsetForGoal(aimbotConfig.corner, aimbotConfig.goal)
+        targetPos = goalLocations[aimbotConfig.goal] + selectedOffset
+        offsetHeight = selectedOffset.Y; isCorner = (aimbotConfig.corner ~= "Center")
+    end
+    local goalCenter = goalLocations[aimbotConfig.goal]
+    local distToGoal = (goalCenter - startPosition).Magnitude
+    local myZ, goalZ = startPosition.Z, goalCenter.Z
+    local targetHeight = aimbotConfig.topCornerMode and ((distToGoal>120) and 0.5 or 1.5) or ((distToGoal>150) and -3.5 or (distToGoal>120) and -2.0 or (distToGoal>80) and -0.5 or 0.5)
+    local finalY
+    if aimbotConfig.topCornerMode then finalY = AB_SAFE_Y_MAX - 0.3
+    elseif isCorner then finalY = goalCenter.Y + offsetHeight
+    else finalY = goalCenter.Y + targetHeight + offsetHeight end
+    finalY = math.clamp(finalY, AB_SAFE_Y_MIN, AB_SAFE_Y_MAX - 0.3)
+    targetPos = Vector3.new(targetPos.X, finalY, targetPos.Z)
+    local displacement = targetPos - startPosition
+    local dx, dy, dz = displacement.X, displacement.Y, displacement.Z
+    local flatDist = math.sqrt(dx*dx+dz*dz)
+    local power = (distToGoal>150) and 105 or (distToGoal>120) and 95 or (distToGoal<40) and 75 or 85
+    local horizontalSpeed = power*0.90
+    local t = math.max(flatDist/horizontalSpeed, 0.05)
+    local Vy = (dy + 0.5*aimbotConfig.gravity*t^2)/t
+    if math.abs(Vy) > power then t = t*1.2; Vy = (dy + 0.5*aimbotConfig.gravity*t^2)/t end
+    local spinY = (myZ>goalZ) and -aimbotConfig.curvePower or aimbotConfig.curvePower
+    if distToGoal>100 then spinY = spinY*0.6 elseif distToGoal<30 then spinY = spinY*1.3 end
+    local w = spinY/-45; local wt = w*t
+    local A = t*0.5*(1+math.cos(wt)); local B = t*0.5*math.sin(wt)
+    local denom = (A*A)+(B*B)
+    local finalVelocity = Vector3.new(dx/t, Vy, dz/t)
+    if denom > 0.001 then
+        local Vx = (A*dx+B*dz)/denom; local Vz = (A*dz-B*dx)/denom
+        finalVelocity = Vector3.new(Vx, Vy, Vz)
+    end
+    if finalVelocity.Magnitude > power then finalVelocity = finalVelocity.Unit*power end
+    return finalVelocity, Vector3.new(0, spinY, 0)
+end)
+
+local calculatePreciseShot = CTN_JIT(function(startPosition)
+    if #AB_PRECISE_DOTS == 0 then
+        local savedCorner, savedRandom, savedFurthest = aimbotConfig.corner, aimbotConfig.randomAim, aimbotConfig.furthestCorner
+        aimbotConfig.corner = "Center"; aimbotConfig.randomAim = false; aimbotConfig.furthestCorner = false
+        local v = calculateShot(startPosition)
+        aimbotConfig.corner = savedCorner; aimbotConfig.randomAim = savedRandom; aimbotConfig.furthestCorner = savedFurthest
+        return v, Vector3.new(0, 0, 0)
+    end
+    local goal = goalLocations[aimbotConfig.goal]
+    local dist = (goal - startPosition).Magnitude
+    local dot = AB_PRECISE_DOTS[math.random(1, #AB_PRECISE_DOTS)]
+    local tY = AB_SAFE_Y_MIN + (1-dot.y)*(AB_SAFE_Y_MAX-AB_SAFE_Y_MIN)
+    local tZ
+    if aimbotConfig.goal == "A" then tZ = AB_SAFE_Z_MAX - dot.x*(AB_SAFE_Z_MAX-AB_SAFE_Z_MIN)
+    else tZ = AB_SAFE_Z_MIN + dot.x*(AB_SAFE_Z_MAX-AB_SAFE_Z_MIN) end
+    local targetPos = Vector3.new(goal.X, tY, tZ)
+    local displacement = targetPos - startPosition
+    local flatDist = Vector3.new(displacement.X, 0, displacement.Z).Magnitude
+    local power = aimbotConfig.maxPower
+    if dist>150 then power=power*1.25 elseif dist>120 then power=power*1.15 elseif dist>80 then power=power*1.05 elseif dist>30 then power=power*0.85 else power=power*0.7 end
+    local horizontalSpeed = power*0.95
+    local airTime = math.max(flatDist/horizontalSpeed, 0.05)
+    local velY = (displacement.Y + (0.5*aimbotConfig.gravity*(airTime^2)))/airTime
+    local v = Vector3.new(displacement.X/airTime, velY, displacement.Z/airTime)
+    if v.Magnitude > power then v = v.Unit*power end
+    return v, Vector3.new(0, 0, 0)
+end)
+
+local isCurrentlyKicking, KickCachedVel, KickCachedRot = false, nil, nil
+local blockedRemotes = {["KickBallEvent"]=true, ["KickBallDeniedEvent"]=true, ["KickWarningEvent"]=true}
+local syncModeToScarlet = CTN_JIT(function()
+    if S.AB_TARGET_MODE == "Random Aim" then aimbotConfig.randomAim = true; aimbotConfig.furthestCorner = false
+    elseif S.AB_TARGET_MODE == "Furthest Corner" then aimbotConfig.randomAim = false; aimbotConfig.furthestCorner = true
+    elseif S.AB_TARGET_MODE ~= "Precise" then
+        aimbotConfig.randomAim = false; aimbotConfig.furthestCorner = false
+        local m = {["Center"]="Center",["Top Right"]="TopRight",["Top Left"]="TopLeft",["Bottom Right"]="BottomRight",["Bottom Left"]="BottomLeft"}
+        aimbotConfig.corner = m[S.AB_TARGET_MODE] or "Center"
+    end
+end)
+
+Bind(RunService.PostSimulation:Connect(CTN_NO_VIRTUALIZE(function()
+    updateBallCache()
+    local ball = cachedBall
+    if not ball or not ball.Parent then globalIsContested = false; return end
+    if RC.enabled then
+        local isC = false
+        local contestRadius = RC.range + 2.5
+        local ballPos = ball.Position
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                if (p.Character.HumanoidRootPart.Position - ballPos).Magnitude <= contestRadius then
+                    isC = true; break
+                end
+            end
+        end
+        globalIsContested = isC
+    else
+        globalIsContested = false
+    end
+end)))
+
+local function hookLocalScripts(char)
+    if not char then return end
+    local handler = char:WaitForChild("BallHandler", 10); if not handler then return end
+    task.spawn(function()
+        if not getsenv then return end
+        local env = getsenv(handler); local attempts = 0
+        while (not env or not env.startAnimation) and attempts < 20 do task.wait(0.5); env = getsenv(handler); attempts = attempts + 1 end
+        if not env then return end
+        if type(env.startAnimation) == "function" then
+            local origStart = env.startAnimation
+            env.startAnimation = CTN_NO_VIRTUALIZE(function(pos, vel, rot, offset, lag)
+                if isCurrentlyKicking then
+                    if KickCachedVel then
+                        vel = KickCachedVel
+                        if KickCachedRot then rot = KickCachedRot end
+                        KickCachedVel, KickCachedRot = nil, nil
+                    end
+                    isCurrentlyKicking = false
+                end
+                return origStart(pos, vel, rot, offset, lag)
+            end)
+        end
+        if type(env.getClosestPlayerName) == "function" then
+            local origGetClosest = env.getClosestPlayerName
+            env.getClosestPlayerName = CTN_NO_VIRTUALIZE(function(...)
+                if RC.enabled and RC.priorityEnabled then
+                    return player.Name
+                end
+                return origGetClosest(...)
+            end)
+        end
+    end)
+end
+if player.Character then task.spawn(function() hookLocalScripts(player.Character) end) end
+Bind(player.CharacterAdded:Connect(function(char) task.wait(1.5); hookLocalScripts(char) end))
+
+local OCCL_PARAMS = RaycastParams.new()
+OCCL_PARAMS.FilterType = Enum.RaycastFilterType.Exclude
+OCCL_PARAMS.RespectCanCollide = true; OCCL_PARAMS.IgnoreWater = true
+local HITBOX_PRIORITY = {HumanoidRootPart=0.85,UpperTorso=0.90,LowerTorso=0.90,Torso=0.90,Head=0.75,RightUpperLeg=0.80,LeftUpperLeg=0.80,RightLowerLeg=0.95,LeftLowerLeg=0.95,RightFoot=1.00,LeftFoot=1.00,["Right Leg"]=0.95,["Left Leg"]=0.95,["Right Arm"]=0.70,["Left Arm"]=0.70,RightHand=0.75,LeftHand=0.75}
+local isSpoofable = CTN_JIT(function(part) return HITBOX_PRIORITY[part.Name] ~= nil end)
+
+local juggleOverride = CTN_JIT(function(part, realPos, oldIndex)
+    local cfg = getgenv().AutoJuggleV1
+    if not cfg or not cfg.enabled then return nil end
+    local char = oldIndex(player, "Character"); if not char then return nil end
+    local ball = cachedBall; if not ball then return nil end
+    if not oldIndex(ball, "Parent") then return nil end
+    local ballPos = oldIndex(ball, "Position")
+    local dx = ballPos.X - realPos.X
+    local dy = ballPos.Y - realPos.Y
+    local dz = ballPos.Z - realPos.Z
+    local mag = math.sqrt(dx*dx + dy*dy + dz*dz)
+    if mag > cfg.reach or mag <= 0.01 then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not (root and hum) then return nil end
+    local rawMove = hum.MoveDirection
+    local moveDir = Vector3.new(rawMove.X, 0, rawMove.Z)
+    local moveLen = moveDir.Magnitude
+    local isMoving = moveLen > 0.05
+    local look = oldIndex(root, "CFrame").LookVector
+    local lookX, lookZ = look.X, look.Z
+    local lookLen = math.sqrt(lookX*lookX + lookZ*lookZ)
+    if lookLen > 0 then lookX, lookZ = lookX/lookLen, lookZ/lookLen else lookX, lookZ = 0, 1 end
+    local alignment = isMoving and ((moveDir.X/moveLen)*lookX + (moveDir.Z/moveLen)*lookZ) or 0
+    local speedFactor = isMoving and math.clamp(moveLen, cfg.minSpeed, cfg.maxSpeed) or 1
+    local dynamicModifier = cfg.baseDynamic + (alignment*cfg.alignMod)*speedFactor
+    return Vector3.new(
+        ballPos.X - (dx/mag)*(cfg.pullOffset*dynamicModifier),
+        realPos.Y,
+        ballPos.Z - (dz/mag)*(cfg.pullOffset*dynamicModifier))
+end)
+
+local AB_GOAL_A, AB_GOAL_B = -313.13, -115.936
+local getMyGoal = CTN_JIT(function()
+    local c=player.Character; if not c then return nil end
+    local lbl
+    for _,v in ipairs(c:GetDescendants()) do if v:IsA("TextLabel") and v.Name=="Team" then lbl=v; break end end
+    if not lbl then return nil end
+    local tn=tostring(lbl.Text):lower():match("^%s*(.-)%s*$"); if tn=="" then return nil end
+    local a=ReplicatedStorage:FindFirstChild("NameTeamA"); local b=ReplicatedStorage:FindFirstChild("NameTeamB")
+    if not (a and b) then return nil end
+    local an=tostring(a.Value):lower():match("^%s*(.-)%s*$"); local bn=tostring(b.Value):lower():match("^%s*(.-)%s*$")
+    if tn==an then return "A" elseif tn==bn then return "B" end
+    return nil
+end)
+local getMyTeamKey = CTN_JIT(function()
+    local c=player.Character; if not c then return nil end
+    for _,v in ipairs(c:GetDescendants()) do
+        if v:IsA("TextLabel") and v.Name=="Team" then
+            local t=tostring(v.Text):lower():match("^%s*(.-)%s*$"); if t~="" then return t end
+        end
+    end
+    if player.Team then return tostring(player.Team):lower() end
+    if player.TeamColor then return tostring(player.TeamColor.Name):lower() end
+    return nil
+end)
+
+local isPlayerEligibleForPass = CTN_JIT(function(p)
+    if not p or p == player then return false end
+    if AP.blacklist[p.Name] then return false end
+    if not AP.teammatesOnly then return true end
+    local myTeamKey = getMyTeamKey()
+    if not myTeamKey then return true end
+    if not p.Character then return false end
+    for _, v in ipairs(p.Character:GetDescendants()) do
+        if v:IsA("TextLabel") and v.Name == "Team" then
+            local tn = tostring(v.Text):lower():match("^%s*(.-)%s*$")
+            return tn == myTeamKey
+        end
+    end
+    if p.Team and tostring(p.Team):lower() == myTeamKey then return true end
+    if p.TeamColor and tostring(p.TeamColor.Name):lower() == myTeamKey then return true end
+    return false
+end)
+
+local getEligiblePlayersForPass = CTN_JIT(function()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if isPlayerEligibleForPass(p) and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(list, p)
+        end
+    end
+    return list
+end)
+
+local cachedTeammates = {}
+local refreshTeammateCache = CTN_JIT(function()
+    local myTeamKey = getMyTeamKey()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and not AP.blacklist[p.Name] and p.Character then
+            local isTeammate = false
+            if myTeamKey then
+                for _, v in ipairs(p.Character:GetDescendants()) do
+                    if v:IsA("TextLabel") and v.Name == "Team" then
+                        local tn = tostring(v.Text):lower():match("^%s*(.-)%s*$")
+                        if tn == myTeamKey then isTeammate = true end
+                        break
+                    end
+                end
+                if not isTeammate then
+                    if p.Team and tostring(p.Team):lower() == myTeamKey then isTeammate = true end
+                    if p.TeamColor and tostring(p.TeamColor.Name):lower() == myTeamKey then isTeammate = true end
+                end
+            else
+                isTeammate = true
+            end
+            if not AP.teammatesOnly or isTeammate then
+                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then table.insert(list, {name=p.Name, hrp=hrp, char=p.Character}) end
+            end
+        end
+    end
+    cachedTeammates = list
+end)
+local PITCH_CENTER_Z = 92.9
+local roleScore = CTN_JIT(function(role, pos, myGoalX, dir)
+    local forwardness = (pos.X - myGoalX) * dir
+    local lateral = pos.Z - PITCH_CENTER_Z
+    local rightness = lateral * dir; local leftness = -rightness
+    local lateralDist = math.abs(lateral)
+    if role == "ST" then if lateralDist > 45 then return -math.huge end; return forwardness - lateralDist * 0.6
+    elseif role == "CDM" then if lateralDist > 40 then return -math.huge end; return -math.abs(forwardness - 85) - lateralDist * 0.6
+    elseif role == "LW" then if leftness < 10 then return -math.huge end; return forwardness - math.abs(leftness - 38) * 0.7
+    elseif role == "RW" then if rightness < 10 then return -math.huge end; return forwardness - math.abs(rightness - 38) * 0.7 end
+    return -math.huge
+end)
+local findPlayerInRole = CTN_JIT(function(role, myPos, list)
+    local myGoalKey = getMyGoal()
+    local myGoalX = (myGoalKey=="A") and AB_GOAL_A or ((myGoalKey=="B") and AB_GOAL_B or AB_GOAL_A)
+    local enemyGoalX = (myGoalKey=="A") and AB_GOAL_B or AB_GOAL_A
+    local dir = (enemyGoalX > myGoalX) and 1 or -1
+    if #list == 0 then return nil end
+    local scored = {}
+    for _, e in ipairs(list) do
+        local s = roleScore(role, e.hrp.Position, myGoalX, dir)
+        if s > -math.huge then table.insert(scored, {hrp=e.hrp, char=e.char, score=s}) end
+    end
+    if #scored == 0 then return nil end
+    table.sort(scored, function(a, b) return a.score > b.score end)
+    return scored[1].hrp, scored[1].char
+end)
+local RANDOM_POSITION_POOL = {"ST","LW","RW"}
+local getPassTargetHRP = CTN_JIT(function(myPos)
+    if AP.mode=="PLAYER" and AP.targetName then
+        if AP.blacklist[AP.targetName] then return nil end
+        for _, e in ipairs(cachedTeammates) do
+            if e.name == AP.targetName then return e.hrp, e.char end
+        end
+        return nil
+    elseif AP.mode=="POSITION" then
+        local pos = AP.position
+        if pos == "RANDOM" then pos = RANDOM_POSITION_POOL[math.random(1,#RANDOM_POSITION_POOL)] end
+        return findPlayerInRole(pos,myPos,cachedTeammates)
+    elseif AP.mode=="FURTHEST" then
+        local best,bestChar,bestD=nil,nil,-1
+        for _,e in ipairs(cachedTeammates) do local d=(e.hrp.Position-myPos).Magnitude; if d>bestD then bestD=d; best=e.hrp; bestChar=e.char end end
+        return best, bestChar
+    elseif AP.mode=="CLOSEST" then
+        local best,bestChar,bestD=nil,nil,math.huge
+        for _,e in ipairs(cachedTeammates) do local d=(e.hrp.Position-myPos).Magnitude; if d<bestD then bestD=d; best=e.hrp; bestChar=e.char end end
+        return best, bestChar
+    end
+    return nil
+end)
+local AP_SPIN_CHANCE = 0.70
+local apSpinCache={sign=1,time=0}
+local computeAimPassSpin = CTN_JIT(function()
+    if not AP.spinEnabled then return Vector3.new(0,0,0) end
+    if math.random()>AP_SPIN_CHANCE then return Vector3.new(0,0,0) end
+    local now=tick(); local sign
+    if now-apSpinCache.time<0.6 then sign=apSpinCache.sign
+    else apSpinCache.time=now; apSpinCache.sign=(math.random()<0.5) and -1 or 1; sign=apSpinCache.sign end
+    return Vector3.new((math.random()-0.5)*6*0.15, sign*6, (math.random()-0.5)*6*0.20)
+end)
+redirectVelToPlayer = CTN_JIT(function(bp, targetHRP, ov)
+    if not targetHRP or not targetHRP.Parent then return nil, nil end
+    local tp = targetHRP.Position
+    local dx, dz = tp.X - bp.X, tp.Z - bp.Z
+    local hd = math.sqrt(dx*dx + dz*dz); if hd < 2.5 then return nil, nil end
+    local ux, uz = dx/hd, dz/hd
+    local spinVec = computeAimPassSpin()
+    local ovx, ovz, ovy = 0, 0, 0
+    if ov then ovx, ovz, ovy = ov.X, ov.Z, ov.Y end
+    local horizSpeed = math.sqrt(ovx*ovx + ovz*ovz)
+    if horizSpeed < 5 then horizSpeed = 5 end
+    if horizSpeed > 120 then horizSpeed = 120 end
+    return Vector3.new(ux*horizSpeed, ovy, uz*horizSpeed), spinVec
+end)
+
+local passHighlight = nil
+local PASS_TICK_DT = 1/240
+local refreshPassTarget = CTN_JIT(function()
+    if not AP.enabled then cachedPassTarget=nil; cachedPassChar=nil; return end
+    local c=player.Character; local hrp=c and c:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+    cachedPassTarget, cachedPassChar = getPassTargetHRP(hrp.Position)
+end)
+local updatePassHighlight = CTN_JIT(function()
+    if not AP.enabled or not AP.outlineTarget or not cachedPassChar or not cachedPassChar.Parent then
+        if passHighlight and passHighlight.Parent then pcall(function() passHighlight:Destroy() end) end
+        passHighlight = nil
+        return
+    end
+    if not passHighlight or not passHighlight.Parent or passHighlight.Adornee ~= cachedPassChar then
+        if passHighlight and passHighlight.Parent then pcall(function() passHighlight:Destroy() end) end
+        local h = Instance.new("Highlight")
+        h.Name = "VantixPassOutline"
+        h.FillColor = Color3.fromRGB(0, 255, 0)
+        h.FillTransparency = 0.35
+        h.OutlineColor = Color3.fromRGB(0, 255, 0)
+        h.OutlineTransparency = 0
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Adornee = cachedPassChar
+        h.Parent = cachedPassChar
+        passHighlight = h
+    end
+end)
+
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", nc(CTN_NO_VIRTUALIZE(function(self, ...)
+        local method = getnamecallmethod()
+        if typeof(self) == "Instance" then
+            if (method == "FireServer" or method == "InvokeServer") and blockedRemotes[self.Name] then return end
+            if method == "FireServer" and self.Name == "KickBall" then
+                local args = {...}; local n = select("#", ...)
+                local ballPos, originalVelocity = args[1], args[2]
+                if typeof(ballPos) == "Vector3" and typeof(originalVelocity) == "Vector3" and originalVelocity.Magnitude > aimbotConfig.minKickPower and aimbotConfig.enabled then
+                    isCurrentlyKicking = true
+                    local newVel, newRot
+                    if S.AB_TARGET_MODE == "Precise" then newVel, newRot = calculatePreciseShot(ballPos)
+                    else
+                        syncModeToScarlet()
+                        if aimbotConfig.curveEnabled then newVel, newRot = calculateExactShot(ballPos, originalVelocity)
+                        else newVel = calculateShot(ballPos); newRot = Vector3.new(0, 0, 0) end
+                    end
+                    if newVel then
+                        KickCachedVel, KickCachedRot = newVel, newRot
+                        args[2] = newVel
+                        if newRot and n >= 3 then args[3] = newRot elseif newRot then args[3] = newRot; n = math.max(n, 3) end
+                        return oldNamecall(self, unpackFn(args, 1, n))
+                    else KickCachedVel = nil; isCurrentlyKicking = false end
+                end
+                if AP.enabled and (not cachedPassTarget or not cachedPassTarget.Parent) then
+                    local c = player.Character; local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                    if hrp then cachedPassTarget, cachedPassChar = getPassTargetHRP(hrp.Position) end
+                end
+                if AP.enabled and cachedPassTarget and cachedPassTarget.Parent and typeof(ballPos)=="Vector3" and typeof(originalVelocity)=="Vector3" and originalVelocity.Magnitude > 5 then
+                    local targetDist = (cachedPassTarget.Position - ballPos).Magnitude
+                    if targetDist >= 2.5 then
+                        local nv, nr = redirectVelToPlayer(ballPos, cachedPassTarget, originalVelocity)
+                        if nv then
+                            isCurrentlyKicking = true
+                            KickCachedVel, KickCachedRot = nv, nr
+                            task.delay(2, function() isCurrentlyKicking = false end)
+                            args[2] = nv; if nr then args[3] = nr; n = math.max(n, 3) end
+                            return oldNamecall(self, unpackFn(args, 1, n))
+                        end
+                    end
+                end
+            end
+        end
+        return oldNamecall(self, ...)
+    end)))
+    _G._vantix_ab_oldNamecall = oldNamecall
+end)
+
+pcall(function()
+    local oldIndex
+    oldIndex = hookmetamethod(game, "__index", nc(CTN_NO_VIRTUALIZE(function(self, key)
+        if checkcaller() then return oldIndex(self, key) end
+        if typeof(self) ~= "Instance" then return oldIndex(self, key) end
+        if hasBallSoftener() and self == ReachSystem.ball and (key == "AssemblyLinearVelocity" or key == "Velocity" or key == "AssemblyAngularVelocity") then
+            local v = oldIndex(self, key)
+            if typeof(v) == "Vector3" and v.Magnitude > 0.01 then return v * ReachSystem.BALL_SPEED end
+            return v
+        end
+        if key ~= "Position" then return oldIndex(self, key) end
+        local realPos = oldIndex(self, key); if typeof(realPos) ~= "Vector3" then return realPos end
+        local char = oldIndex(player, "Character"); if not char then return realPos end
+        local n = oldIndex(self, "Name")
+        local ball = ReachSystem.ball
+        if S.SNEAKY_ACTIVE and (n == "UpperTorso" or n == "LowerTorso" or n == "Torso") and ball and oldIndex(ball, "Parent") then
+            local bp = oldIndex(ball, "Position")
+            if bp then
+                local dx, dy, dz = bp.X - realPos.X, bp.Y - realPos.Y, bp.Z - realPos.Z
+                local mag = math.sqrt(dx*dx + dy*dy + dz*dz)
+                if mag <= S.SNEAKY_REACH then
+                    local rp = char:FindFirstChild("HumanoidRootPart")
+                    if rp then
+                        local look = oldIndex(rp, "CFrame").LookVector
+                        local lx, lz = look.X, look.Z
+                        local lLen = math.sqrt(lx*lx + lz*lz)
+                        if lLen > 0 then lx, lz = lx/lLen, lz/lLen else lx, lz = 0, 1 end
+                        return Vector3.new(bp.X - lx*S.SNEAKY_BUFFER, realPos.Y - S.SNEAKY_HITBOX_DROP, bp.Z - lz*S.SNEAKY_BUFFER)
+                    end
+                end
+            end
+        end
+        if getgenv().AutoJuggleV1.enabled and (n=="Torso" or n=="UpperTorso" or n=="LowerTorso" or n=="HumanoidRootPart" or n=="Head") then
+            local spoofed = juggleOverride(self, realPos, oldIndex)
+            if typeof(spoofed) == "Vector3" then return spoofed end
+        end
+        if isReachEnabled() and self == ReachSystem.torso then
+            if ball and oldIndex(ball, "Parent") then
+                local bpos = oldIndex(ball, "Position")
+                if bpos then
+                    local diff = realPos - bpos; local dist = diff.Magnitude
+                    local effReach = getActiveReach() + ReachSystem.REACH_BUFFER
+                    local blendStart = effReach
+                    local blendEnd = math.max(effReach - ReachSystem.BLEND_BAND, ReachSystem.MIN_GRIP + 0.05)
+                    if dist > 0.01 and dist < blendStart and dist > ReachSystem.MIN_GRIP then
+                        local targetGrip = math.max(ReachSystem.SPOOF, ReachSystem.MIN_GRIP)
+                        local look = oldIndex(ReachSystem.torso, "CFrame").LookVector
+                        local toBall = bpos - realPos; local facing = 0
+                        if toBall.Magnitude > 0.01 then
+                            facing = look:Dot(toBall.Unit)
+                            if facing > ReachSystem.FACING_THRESH then targetGrip = targetGrip - ReachSystem.FORWARD_PUSH * facing
+                            elseif facing < -0.35 then targetGrip = targetGrip + 0.25 end
+                        end
+                        if targetGrip < ReachSystem.MIN_GRIP then targetGrip = ReachSystem.MIN_GRIP end
+                        local useGrip
+                        if dist >= blendEnd then
+                            local t = math.clamp((blendStart - dist) / math.max(blendStart - blendEnd, 1e-3), 0, 1)
+                            local ts = t * t * t * (t * (t * 6 - 15) + 10)
+                            useGrip = dist + (targetGrip - dist) * ts
+                        else useGrip = targetGrip end
+                        if useGrip < ReachSystem.MIN_GRIP then useGrip = ReachSystem.MIN_GRIP end
+                        if useGrip > dist then useGrip = dist end
+                        local spoofed = bpos + diff.Unit * useGrip
+                        if useGrip <= ReachSystem.SPOOF + 0.7 then
+                            local k = math.clamp((ReachSystem.SPOOF + 0.7 - useGrip) / 0.7, 0, 1)
+                            local ks = k * k * (3 - 2 * k)
+                            spoofed = Vector3.new(spoofed.X, spoofed.Y + ReachSystem.HEIGHT_LIFT * ks, spoofed.Z)
+                        end
+                        return spoofed
+                    end
+                end
+            end
+        end
+        if oldIndex(self, "Parent") ~= char then return realPos end
+        if RC.enabled and key == "Position" then
+            local caller = nil
+            pcall(function() caller = getcallingscript() end)
+            if caller then
+                local cName = caller.Name
+                if cName:find("Camera") or cName == "PlayerModule" or cName == "TransparencyController" then
+                    return realPos
+                end
+            end
+            if self:IsA("BasePart") and SPOOFABLE_PARTS[self.Name] then
+                local ball = cachedBall
+                if ball and ball.Parent then
+                    if char and self:IsDescendantOf(char) then
+                        local ballPos = ball.Position
+                        local dx, dy, dz = ballPos.X - realPos.X, ballPos.Y - realPos.Y, ballPos.Z - realPos.Z
+                        local trueMag = math.sqrt(dx*dx + dy*dy + dz*dz)
+                        if not globalIsContested and trueMag <= RC.range then
+                            if RC.magnetActive then
+                                local desiredDistance = RC.holdDistance or 1.5
+                                local dirX, dirY, dirZ
+                                if trueMag > 0.01 then
+                                    dirX, dirY, dirZ = dx/trueMag, dy/trueMag, dz/trueMag
+                                else
+                                    dirX, dirY, dirZ = 1, 0, 0
+                                end
+                                local targetX = ballPos.X - dirX * desiredDistance
+                                local targetY = realPos.Y
+                                local targetZ = ballPos.Z - dirZ * desiredDistance
+                                local dispX, dispZ = targetX - realPos.X, targetZ - realPos.Z
+                                local dispMag = math.sqrt(dispX*dispX + dispZ*dispZ)
+                                local MAX_STEP = RC.maxStep or 2.0
+                                local newX, newZ
+                                if dispMag > MAX_STEP then
+                                    newX = realPos.X + (dispX/dispMag)*MAX_STEP
+                                    newZ = realPos.Z + (dispZ/dispMag)*MAX_STEP
+                                else
+                                    newX, newZ = targetX, targetZ
+                                end
+                                return Vector3_new(newX, targetY, newZ)
+                            else
+                                return Vector3_new(ballPos.X, realPos.Y, ballPos.Z)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return realPos
+    end)))
+    _G._vantix_ab_oldIndex = oldIndex
+end)
+
+getgenv().BallPredictor = getgenv().BallPredictor or { enabled = false }
+local BPcfg = getgenv().BallPredictor
+local bpVisuals = workspace:FindFirstChild("trajectory")
+if not bpVisuals then bpVisuals = Instance.new("Folder"); bpVisuals.Name = "trajectory"; bpVisuals.Parent = workspace end
+local bpClear = CTN_JIT(function() for _, v in ipairs(bpVisuals:GetChildren()) do v:Destroy() end end)
+local bpCreateSegment = CTN_JIT(function(a, b)
+    local dir = b - a; local d = dir.Magnitude; if d < 0.03 then return end
+    local mid = (a + b) * 0.5
+    local p = Instance.new("Part"); p.Anchored = true; p.CanCollide = false; p.CastShadow = false
+    p.Material = Enum.Material.Neon; p.Color = Color3.fromRGB(120,150,255); p.Transparency = 0
+    p.Size = Vector3.new(0.5, 2, d); p.CFrame = CFrame.new(mid, mid + dir) * CFrame.Angles(math.pi/2, 0, 0); p.Parent = bpVisuals
+end)
+local createTrajectoryMarker = CTN_JIT(function(pos)
+    local m = Instance.new("Part")
+    m.Shape = Enum.PartType.Ball
+    m.Anchored = true
+    m.CanCollide = false
+    m.CastShadow = false
+    m.Material = Enum.Material.Neon
+    m.Color = Color3.fromRGB(211,211,211)
+    m.Size = Vector3.new(1.5,1.5,1.5)
+    m.CFrame = CFrame.new(pos)
+    m.Parent = bpVisuals
+end)
+local bpKickEvent = ReplicatedStorage:FindFirstChild("KickBallEvent")
+if bpKickEvent then
+    Bind(bpKickEvent.OnClientEvent:Connect(CTN_NO_VIRTUALIZE(function(...)
+        if not BPcfg.enabled or STREAMER.active then bpClear(); return end
+        bpClear()
+        local char = player.Character; if not char then return end
+        local handlerModule = char:FindFirstChild("BallHandler"); if not handlerModule then return end
+        if not getsenv then return end
+        local ok, BallHandler = pcall(getsenv, handlerModule); if not ok or not BallHandler then return end
+        local args = {...}; local pos, vel, spin = args[2], args[3], args[4]
+        if typeof(pos) ~= "Vector3" and typeof(args[1]) == "Vector3" then pos, vel, spin = args[1], args[2], args[3] end
+        if typeof(pos) ~= "Vector3" or typeof(vel) ~= "Vector3" then return end
+        local pts; local success = pcall(function() pts = BallHandler.recordBallAnimation(pos, vel, spin) end)
+        if not success or not pts or #pts < 2 then return end
+        task.defer(function()
+            for i=1,#pts-1 do
+                local a = Vector3.new(pts[i].X, math.max(pts[i].Y, 5.473), pts[i].Z)
+                local b = Vector3.new(pts[i+1].X, math.max(pts[i+1].Y, 5.473), pts[i+1].Z)
+                bpCreateSegment(a, b)
+            end
+            pcall(function()
+                createTrajectoryMarker(pts[1])
+                if BallHandler.ballInGoalA(pts[#pts]) or BallHandler.ballInGoalB(pts[#pts]) then
+                    createTrajectoryMarker(pts[#pts])
+                else
+                    createTrajectoryMarker(pts[math.round(#pts/1.6)])
+                end
+            end)
+        end)
+    end)))
+end
+
+local currentESP = nil
+local currentTrail, trailAtt0, trailAtt1 = nil, nil, nil
+Bind(RunService.RenderStepped:Connect(CTN_NO_VIRTUALIZE(function()
+    if ESP_CONFIG.enabled then
+        local ball = getBall()
+        if ball and (not currentESP or currentESP.Parent ~= ball) then
+            if currentESP then pcall(function() currentESP:Destroy() end) end
+            currentESP = Instance.new("Highlight")
+            currentESP.Name = "VantixBallESP"
+            currentESP.FillColor = GOLD_MIX
+            currentESP.OutlineColor = BLACK_MIX
+            currentESP.FillTransparency = ESP_CONFIG.transparency
+            currentESP.OutlineTransparency = 0
+            currentESP.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            currentESP.Adornee = ball
+            currentESP.Parent = ball
+        end
+        if currentESP then currentESP.FillTransparency = ESP_CONFIG.transparency end
+    else
+        if currentESP then pcall(function() currentESP:Destroy() end); currentESP = nil end
+    end
+    if TRAIL_CONFIG.enabled then
+        local ball = getBall()
+        if ball and ball:IsA("BasePart") and (not currentTrail or currentTrail.Parent ~= ball) then
+            if currentTrail then pcall(function() currentTrail:Destroy() end) end
+            if trailAtt0 then pcall(function() trailAtt0:Destroy() end) end
+            if trailAtt1 then pcall(function() trailAtt1:Destroy() end) end
+            trailAtt0 = Instance.new("Attachment", ball); trailAtt0.Position = Vector3.new(0, 0.5, 0)
+            trailAtt1 = Instance.new("Attachment", ball); trailAtt1.Position = Vector3.new(0, -0.5, 0)
+            currentTrail = Instance.new("Trail", ball)
+            currentTrail.Attachment0 = trailAtt0
+            currentTrail.Attachment1 = trailAtt1
+            currentTrail.Color = TRAIL_COLOR_SEQ
+            currentTrail.Lifetime = TRAIL_CONFIG.lifetime
+            currentTrail.MinLength = 0.02
+            currentTrail.LightEmission = 1
+            currentTrail.LightInfluence = 0
+            currentTrail.FaceCamera = true
+            currentTrail.Enabled = true
+        end
+        if currentTrail then currentTrail.Lifetime = TRAIL_CONFIG.lifetime end
+    else
+        if currentTrail then pcall(function() currentTrail:Destroy() end); currentTrail = nil end
+        if trailAtt0 then pcall(function() trailAtt0:Destroy() end); trailAtt0 = nil end
+        if trailAtt1 then pcall(function() trailAtt1:Destroy() end); trailAtt1 = nil end
+    end
+end)))
+
+local GLOVE_TARGETS = {"LeftGlove","RightGlove","LeftShoe","RightShoe"}
+local gloveOriginal, gloveLoop = {}, nil
+local gloveStore = CTN_JIT(function(char)
+    for _,name in ipairs(GLOVE_TARGETS) do
+        local part=char:FindFirstChild(name,true)
+        if part and part:IsA("BasePart") then gloveOriginal[part]={color=part.Color,material=part.Material} end
+    end
+end)
+local gloveApply = CTN_JIT(function(part,partName)
+    local cName=GLOVE.colors[partName]; if not cName then return end
+    local col=COLOR_MAP[cName]; if not col then return end
+    part.Material=(GLOVE.material=="Neon" and Enum.Material.Neon or Enum.Material.Plastic); part.Color=col
+end)
+local gloveRestore = CTN_JIT(function(part) local d=gloveOriginal[part]; if d then part.Material=d.material; part.Color=d.color end end)
+local gloveStartLoop = CTN_JIT(function(char)
+    if gloveLoop then return end
+    gloveLoop=task.spawn(function()
+        while char.Parent do
+            for _,name in ipairs(GLOVE_TARGETS) do
+                local part=char:FindFirstChild(name,true)
+                if part and part:IsA("BasePart") then
+                    if GLOVE.enabled then gloveApply(part,name) else gloveRestore(part) end
+                end
+            end
+            task.wait(0.05)
+        end
+        gloveLoop=nil
+    end)
+end)
+player.CharacterAdded:Connect(function(char) gloveStore(char); gloveStartLoop(char) end)
+if player.Character then gloveStore(player.Character); gloveStartLoop(player.Character) end
+
+local EQUIP_TAG = "VantixHairEquipped"
+local HAIR_ATTACHMENT_MAP = {HairBacon="HairAttachment",HairBlack="HairAttachment",HairBlackMask="FaceFrontAttachment",HairBlonde="HairAttachment",HairBrown="HairAttachment",HairCap="HatAttachment",HairCharmer="HairAttachment",HairCool="HairAttachment",HairDio="HairAttachment",HairEgg="HatAttachment",HairFloof="HairAttachment",HairFluffed="HairAttachment",HairGreen="HairAttachment",HairHalloween="FaceFrontAttachment",HairHat="HatAttachment",HairHockeyMask="FaceFrontAttachment",HairKnot="HairAttachment",HairLongPink="HairAttachment",HairMessy="HairAttachment",HairNerd="FaceFrontAttachment",HairBold="HairAttachment"}
+local hairNukeAll = CTN_JIT(function(char)
+    for _,o in ipairs(char:GetChildren()) do if o:GetAttribute(EQUIP_TAG) then o:Destroy() end end
+    for _,o in ipairs(char:GetChildren()) do
+        if o.Name and typeof(o.Name)=="string" and o.Name:sub(1,4)=="Hair" and not o:IsA("Attachment") then o:Destroy() end
+    end
+    local head=char:FindFirstChild("Head")
+    if head then for _,c in ipairs(head:GetChildren()) do if c:IsA("Weld") and (c.Name=="HairWeld" or c.Name=="SubWeld") then c:Destroy() end end end
+end)
+local hairGetHandle = CTN_JIT(function(c)
+    if c:IsA("BasePart") then return c end
+    local function srch(p,n) if p.Name==n and p:IsA("BasePart") then return p end; for _,cc in ipairs(p:GetChildren()) do local f=srch(cc,n); if f then return f end end end
+    local h=srch(c,"Handle"); if h then return h end
+    for _,d in ipairs(c:GetDescendants()) do if d:IsA("MeshPart") then return d end end
+    for _,d in ipairs(c:GetDescendants()) do if d:IsA("BasePart") then return d end end
+end)
+local hairGetAllParts = CTN_JIT(function(o) local p={}; if o:IsA("BasePart") then table.insert(p,o) end; for _,d in ipairs(o:GetDescendants()) do if d:IsA("BasePart") then table.insert(p,d) end end; return p end)
+local hairFindAtt = CTN_JIT(function(o) for _,c in ipairs(o:GetChildren()) do if c:IsA("Attachment") then return c end end; for _,d in ipairs(o:GetDescendants()) do if d:IsA("Attachment") then return d end end end)
+local removeHair = CTN_JIT(function() local c=player.Character; if c then hairNukeAll(c) end; V.hairId="DEFAULT" end)
+local equipHair = CTN_JIT(function(hairId)
+    if hairId=="DEFAULT" or hairId==nil then removeHair(); return end
+    local c=player.Character; if not c then return end
+    local head=c:FindFirstChild("Head"); if not head then return end
+    hairNukeAll(c)
+    local src=ReplicatedStorage:FindFirstChild(hairId); if not src then return end
+    local cl=src:Clone(); local h=hairGetHandle(cl); if not h then cl:Destroy(); return end
+    local ap=hairGetAllParts(cl); local relMap={}
+    for _,p in ipairs(ap) do if p~=h then relMap[p]=h.CFrame:ToObjectSpace(p.CFrame) end end
+    local att=hairFindAtt(h); local hAttCF=att and att.CFrame or CFrame.new()
+    local hAttName=HAIR_ATTACHMENT_MAP[hairId] or "HairAttachment"
+    local hAtt=head:FindFirstChild(hAttName) or head:FindFirstChild("HairAttachment")
+    if not hAtt then cl:Destroy(); return end
+    for _,p in ipairs(ap) do p.Anchored=false; p.CanCollide=false; p.Massless=true end
+    for _,d in ipairs(cl:GetDescendants()) do if d:IsA("Weld") or d:IsA("WeldConstraint") or d:IsA("Motor6D") then d:Destroy() end end
+    h.CFrame=head.CFrame*hAtt.CFrame*hAttCF:Inverse()
+    for p,r in pairs(relMap) do p.CFrame=h.CFrame*r end
+    local mw=Instance.new("Weld"); mw.Name="HairWeld"; mw.Part0=head; mw.Part1=h; mw.C0=hAtt.CFrame; mw.C1=hAttCF; mw.Parent=head
+    for p,r in pairs(relMap) do local sw=Instance.new("Weld"); sw.Name="SubWeld"; sw.Part0=h; sw.Part1=p; sw.C0=r; sw.C1=CFrame.new(); sw.Parent=h end
+    cl:SetAttribute(EQUIP_TAG,true); cl.Parent=c; V.hairId=hairId
+end)
+local applyShirtNumber = CTN_JIT(function(num)
+    local c=player.Character; if not c then return end
+    for _,v in ipairs(c:GetDescendants()) do
+        if v:IsA("TextLabel") or v:IsA("TextBox") then if tonumber(v.Text) or v.Name:lower():find("num") then v.Text=tostring(num) end
+        elseif (v:IsA("StringValue") or v:IsA("IntValue")) and v.Name:lower():find("num") then v.Value=tostring(num) end
+    end
+    V.shirtNum=tostring(num)
+end)
+local applyShirtName = CTN_JIT(function(name)
+    local c=player.Character; if not c then return end
+    for _,v in ipairs(c:GetDescendants()) do
+        if v:IsA("TextLabel") or v:IsA("TextBox") then
+            local n=v.Name:lower()
+            if n:find("name") and not n:find("username") and not n:find("displayname") then v.Text=tostring(name) end
+        elseif (v:IsA("StringValue") or v:IsA("IntValue")) and v.Name:lower():find("name") and not v.Name:lower():find("username") then v.Value=tostring(name) end
+    end
+    V.shirtName=tostring(name)
+end)
+
+do
+    local placeIDs = {["procup"]=138792551842718,["junior"]=16452693191,["pro"]=16452698027,["elite"]=16876418704,["cup"]=16453243555,["futsal"]=16452721151,["street"]=105531756926941,["2vs2"]=130754361889730,["1vs1"]=18738477182,["quest"]=81844361462023,["academy"]=16452695324}
+    local sortedKeys = {}; for key in pairs(placeIDs) do table.insert(sortedKeys, key) end
+    table.sort(sortedKeys, function(a,b) return #a>#b end)
+    local getPlaceID = CTN_JIT(function(portalName) local name = portalName:lower():gsub("portal",""):gsub(" ",""):gsub("_",""); for _,key in ipairs(sortedKeys) do if name:find(key) then return placeIDs[key] end end; return nil end)
+    local debounce = false
+    local onTouch = CTN_JIT(function(portal, hit)
+        if not rankBypassCfg.enabled then return end
+        if hit.Parent ~= player.Character then return end
+        if debounce then return end
+        local id = getPlaceID(portal.Name); if not id then id = getPlaceID(portal.Parent.Name) end
+        if id then debounce = true; task.spawn(function() for i=1,15 do pcall(function() TPS:Teleport(id, player) end); task.wait(0.2) end; debounce = false end) end
+    end)
+    local hooked = {}
+    local hookPortals = CTN_JIT(function()
+        local lobby = workspace:FindFirstChild("Lobby"); local portals = lobby and lobby:FindFirstChild("Portals"); if not portals then return end
+        for _,portal in pairs(portals:GetDescendants()) do
+            if portal:IsA("BasePart") and not hooked[portal] then hooked[portal] = true; portal.Touched:Connect(function(hit) onTouch(portal, hit) end) end
+        end
+    end)
+    hookPortals(); task.spawn(function() while true do task.wait(3); pcall(hookPortals) end end)
+end
+
+local passAcc, mateAcc = 0, 0
+Bind(RunService.RenderStepped:Connect(CTN_NO_VIRTUALIZE(function(dt)
+    mateAcc = mateAcc + dt; if mateAcc >= (1/30) then mateAcc = 0; refreshTeammateCache() end
+    passAcc = passAcc + dt
+    if passAcc >= PASS_TICK_DT then passAcc = 0; refreshPassTarget(); updatePassHighlight() end
+end)))
+
+local GOAL_A_X_GK, GOAL_B_X_GK = -313.13, -115.936
+local Z_MIN_GK, Z_MAX_GK = 78.036, 107.715
+local GOAL_CENTER_Z_GK = (Z_MIN_GK + Z_MAX_GK)/2
+local GRAVITY_GK, GROUND_Y_GK, BOUNCE_DAMP_Y = 55, 5.473, 0.55
+local CROSSBAR_Y_GK, SIM_DT, MAX_STEPS_GK = 18, 0.004, 2500
+local THREAT_WINDOW, GOAL_OFFSET_GK = 7.5, -0.5
+local Z_SAVE_MIN, Z_SAVE_MAX = Z_MIN_GK-2.6, Z_MAX_GK+2.6
+local Y_SAVE_MAX, STAND_REACH_Y = CROSSBAR_Y_GK+0.6, GROUND_Y_GK+5.5
+local PANIC_RANGE, PANIC_HOLD = 6.0, 0.5
+local smoothVelocity, gkLastVel, panicTimer = Vector3.zero, Vector3.zero, 0
+local gkCachedBall = nil
+local GKGetBall = CTN_JIT(function()
+    if not gkCachedBall or not gkCachedBall:IsDescendantOf(workspace) then
+        local f = workspace:FindFirstChild("FootballField"); gkCachedBall = f and f:FindFirstChild("SoccerBall")
+    end
+    return gkCachedBall
+end)
+local SimulateExactGamePhysics = CTN_JIT(function(ballPos, ballVel, ballRotVel, goalLineX)
+    if math.abs(ballVel.X)<0.15 then return nil end
+    if (ballVel.X<0)~=(goalLineX<ballPos.X) then return nil end
+    local totalTime,bounces,flightTime=0,0,0
+    local sPx,sPy,sPz=ballPos.X,ballPos.Y,ballPos.Z
+    local sVx,sVy,sVz=ballVel.X,ballVel.Y,ballVel.Z
+    local curveFactor=ballRotVel.Y/-45; local prevX=sPx
+    local trajectory={{x=sPx,y=sPy,z=sPz,t=0,vy=sVy,b=0}}; local crossedGoal=false
+    for _=1,MAX_STEPS_GK do
+        flightTime=flightTime+SIM_DT; totalTime=totalTime+SIM_DT
+        local angle=curveFactor*flightTime
+        local curVx=sVx*math.cos(angle)-sVz*math.sin(angle)
+        local curVz=sVx*math.sin(angle)+sVz*math.cos(angle)
+        local npx=sPx+sVx*flightTime+0.5*(curVx-sVx)*flightTime
+        local npy=sPy+sVy*flightTime-0.5*GRAVITY_GK*(flightTime^2)
+        local npz=sPz+sVz*flightTime+0.5*(curVz-sVz)*flightTime
+        local nvy=sVy-GRAVITY_GK*flightTime
+        table.insert(trajectory,{x=npx,y=npy,z=npz,t=totalTime,vy=nvy,b=bounces})
+        if (prevX<=goalLineX and npx>=goalLineX) or (prevX>=goalLineX and npx<=goalLineX) then crossedGoal=true; break end
+        if npy<GROUND_Y_GK then
+            bounces=bounces+1
+            local dampXZ=math.abs(nvy)<10 and 0.99 or 0.80
+            sVx,sVz=curVx*dampXZ,curVz*dampXZ; sVy=math.abs(nvy)*BOUNCE_DAMP_Y
+            sPx,sPy,sPz=npx,GROUND_Y_GK,npz
+            curveFactor=math.clamp(curveFactor*0.8+(ballRotVel.Y/-45)*0.2*((math.sqrt(curVx^2+curVz^2))/60),-1.2,1.2); flightTime=0
+        end
+        prevX=npx
+        if (curVx^2+nvy^2+curVz^2)<0.09 or totalTime>THREAT_WINDOW then break end
+    end
+    return crossedGoal and trajectory or nil
+end)
+local GetStateAtX = CTN_JIT(function(trajectory, targetX)
+    if not trajectory or #trajectory==0 then return nil end
+    local prev=trajectory[1]
+    for i=2,#trajectory do
+        local cur=trajectory[i]
+        if (prev.x<=targetX and cur.x>=targetX) or (prev.x>=targetX and cur.x<=targetX) then
+            local frac=math.abs(targetX-prev.x)/math.max(math.abs(cur.x-prev.x),0.0001)
+            return {x=targetX, y=math.max(prev.y+(cur.y-prev.y)*frac, GROUND_Y_GK), z=prev.z+(cur.z-prev.z)*frac, t=prev.t+(cur.t-prev.t)*frac, vy=prev.vy+(cur.vy-prev.vy)*frac, b=cur.b}
+        end
+        prev=cur
+    end
+    return nil
+end)
+Bind(RunService.Heartbeat:Connect(CTN_NO_VIRTUALIZE(function()
+    if not (S.GK_AUTO_ON or S.GK_GROUNDSAVE_ON) then return end
+    local char=player.Character; local hrp=char and char:FindFirstChild("HumanoidRootPart")
+    local hum=char and char:FindFirstChildOfClass("Humanoid"); local b=GKGetBall()
+    if not hrp or not hum or not b then
+        if hrp and hrp:FindFirstChild("GK_V") then hrp.GK_V.Enabled=false; hrp.GK_R.Enabled=false end
+        return
+    end
+    if not hrp:FindFirstChild("GK_V") then
+        local att=Instance.new("Attachment",hrp); att.Name="GK_A"
+        local lvI=Instance.new("LinearVelocity",hrp); lvI.Name="GK_V"; lvI.Attachment0=att
+        lvI.VelocityConstraintMode=Enum.VelocityConstraintMode.Vector; lvI.ForceLimitMode=Enum.ForceLimitMode.PerAxis
+        local aoI=Instance.new("AlignOrientation",hrp); aoI.Name="GK_R"; aoI.Attachment0=att
+        aoI.Mode=Enum.OrientationAlignmentMode.OneAttachment; aoI.MaxTorque=math.huge; aoI.Responsiveness=40
+    end
+    local lv, ao = hrp.GK_V, hrp.GK_R
+    local rawGoalX = (math.abs(hrp.Position.X-GOAL_A_X_GK) < math.abs(hrp.Position.X-GOAL_B_X_GK)) and GOAL_A_X_GK or GOAL_B_X_GK
+    local dir = (rawGoalX<-200) and 1 or -1
+    local goalX = rawGoalX + (GOAL_OFFSET_GK*dir)
+    local ballPos = b.Position; local vel = b.AssemblyLinearVelocity; local rotVel = b.AssemblyAngularVelocity
+    local flatDistToBall = (Vector3.new(ballPos.X,hrp.Position.Y,ballPos.Z)-hrp.Position).Magnitude
+    local reachVal = ReachSystem.REACH + 1.2
+    local emergencyAdd = math.clamp(S.GK_EMERGENCY_ADD or 0.4,0,2)
+    local velMag = vel.Magnitude; local lastMag = gkLastVel.Magnitude
+    local shotFired = (velMag-lastMag)>15 and velMag>20
+    gkLastVel = vel
+    if shotFired and flatDistToBall<=PANIC_RANGE then panicTimer=PANIC_HOLD end
+    if panicTimer>0 then panicTimer=panicTimer-(1/60) end
+    local emergencySave = panicTimer>0 and flatDistToBall<=(PANIC_RANGE+2.0)
+    local emergencyReach = reachVal+emergencyAdd
+    local inEmergencyReach = emergencySave and flatDistToBall<=emergencyReach
+    local targetZ, predY = GOAL_CENTER_Z_GK, GROUND_Y_GK
+    local targetX = goalX + dir*0.5
+    local timeToGoal = 999; local isShotOnTarget = false
+    if inEmergencyReach then targetZ=ballPos.Z; predY=ballPos.Y; isShotOnTarget=true; timeToGoal=0
+    else
+        local ballHeading = ((rawGoalX==GOAL_A_X_GK) and vel.X<0) or ((rawGoalX==GOAL_B_X_GK) and vel.X>0)
+        local ballBehind = (dir==1 and ballPos.X<hrp.Position.X) or (dir==-1 and ballPos.X>hrp.Position.X)
+        local trajectory = nil
+        if ballHeading and not ballBehind then trajectory=SimulateExactGamePhysics(ballPos,vel,rotVel,rawGoalX) end
+        local goalState = trajectory and GetStateAtX(trajectory,rawGoalX) or nil
+        if goalState and goalState.t<THREAT_WINDOW then
+            timeToGoal = goalState.t
+            if goalState.z>=Z_SAVE_MIN and goalState.z<=Z_SAVE_MAX and goalState.y<=Y_SAVE_MAX then isShotOnTarget=true; targetZ=goalState.z; predY=goalState.y end
+        end
+    end
+    local saveReact = math.clamp(S.GK_SAVE_REACT or 1.7, 0.5, 3.0)
+    local isActivelySaving = inEmergencyReach or (isShotOnTarget and timeToGoal<=saveReact*1.05)
+    if not isActivelySaving then lv.Enabled=false; ao.Enabled=false; smoothVelocity=Vector3.zero; return end
+    local st = hum:GetState()
+    local onGround = st~=Enum.HumanoidStateType.Jumping and st~=Enum.HumanoidStateType.Freefall
+    local jumpReact = math.clamp(S.GK_JUMP_REACT or 0.4, 0.1, 1.0)
+    if onGround and predY>=STAND_REACH_Y and timeToGoal<=jumpReact then hum.Jump=true; hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    lv.Enabled=true; ao.Enabled=true; lv.MaxAxesForce=Vector3.new(500000,0,500000)
+    local lungeVec = Vector3.new(targetX,hrp.Position.Y,targetZ)-hrp.Position
+    local desiredVel = Vector3.zero
+    if lungeVec.Magnitude>0.05 then
+        desiredVel = lungeVec*40
+        local diveLimit = math.clamp(S.GK_DIVE_SPEED or 26, 10, 60)
+        if desiredVel.Magnitude>diveLimit then desiredVel=desiredVel.Unit*diveLimit end
+    end
+    local softSpeed = 8
+    if inEmergencyReach then
+        if flatDistToBall<=1.6 then desiredVel=Vector3.zero
+        else local cap=6; if desiredVel.Magnitude>cap then desiredVel=desiredVel.Unit*cap end end
+    else
+        local softRange=reachVal+1.0; local brakeRange=reachVal+3.5
+        if flatDistToBall<=softRange then if desiredVel.Magnitude>softSpeed then desiredVel=desiredVel.Unit*softSpeed end
+        elseif flatDistToBall<=brakeRange then local cap=math.max(softSpeed*2,10); if desiredVel.Magnitude>cap then desiredVel=desiredVel.Unit*cap end end
+    end
+    smoothVelocity = smoothVelocity + (desiredVel-smoothVelocity)*1.0
+    lv.VectorVelocity = smoothVelocity
+    local lookDir = Vector3.new(ballPos.X,hrp.Position.Y,ballPos.Z)-hrp.Position
+    if lookDir.Magnitude>0.1 then ao.CFrame=CFrame.lookAt(hrp.Position, hrp.Position+lookDir.Unit*10) end
+end)))
+
+local BALL_CTL = {freeze=false, frozenCFrame=nil, frozenAnchored=nil, _ownedNet=false}
+
+-- ═══ FUN STATE (Auto Goal + Goal Trainer + Delete Ball) ═══
+local AUTO_GOAL = {enabled = false, mode = "LOOP", lastFire = 0, _refreshToggle = nil}
+local GoalTrainer = {goalPart = nil, running = false, loopThread = nil}
+local DELETE_BALL = {enabled = false, _thread = nil}
+
+local findBallNow = CTN_JIT(function()
+    local field = workspace:FindFirstChild("FootballField")
+    if field then local b = field:FindFirstChild("SoccerBall"); if b and b:IsA("BasePart") then return b end end
+    if cachedBall and cachedBall.Parent then return cachedBall end
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") then
+            local n = v.Name:lower()
+            if n:find("ball") or n:find("soccer") or n:find("football") then if not v.Anchored and v.Transparency < 1 then return v end end
+        end
+    end
+    return nil
+end)
+
+local ballControlTick = CTN_JIT(function()
+    if not (BALL_CTL.freeze or AUTO_GOAL.enabled) then return end
+    local b = findBallNow(); if not b then return end
+
+    if BALL_CTL.freeze then
+        if not BALL_CTL.frozenCFrame then
+            BALL_CTL.frozenCFrame = b.CFrame
+            BALL_CTL.frozenAnchored = b.Anchored
+        end
+        pcall(function()
+            if not BALL_CTL._ownedNet and b.SetNetworkOwner and not b.Anchored then
+                local okOwner = pcall(function() b:SetNetworkOwner(player) end)
+                if okOwner then BALL_CTL._ownedNet = true end
+            end
+            b.Anchored = true
+            b.CanCollide = false
+            b.AssemblyLinearVelocity = Vector3.zero
+            b.AssemblyAngularVelocity = Vector3.zero
+            b.CFrame = BALL_CTL.frozenCFrame
+        end)
+    end
+
+    if AUTO_GOAL.enabled and not BALL_CTL.freeze then
+        local now = os.clock()
+        if (now - AUTO_GOAL.lastFire) > 1.0 then
+            local myGoalKey = getMyGoal()
+            local goalKey = myGoalKey and ((myGoalKey == "A") and "B" or "A") or "B"
+            local target = goalLocations[goalKey]
+            local scoreSign = (goalKey == "B") and 1 or -1
+            local distToGoal = (b.Position - target).Magnitude
+            pcall(function()
+                if distToGoal > 30 then b.CFrame = CFrame.new(target.X - scoreSign * 10, target.Y + 2, target.Z) end
+                b.AssemblyLinearVelocity = Vector3.new(scoreSign * 60, 10, 0)
+            end)
+            AUTO_GOAL.lastFire = now
+            if AUTO_GOAL.mode == "SINGLE" then
+                AUTO_GOAL.enabled = false
+                if AUTO_GOAL._refreshToggle then pcall(AUTO_GOAL._refreshToggle, false) end
+            end
+        end
+    end
+end)
+Bind(RunService.Stepped:Connect(CTN_NO_VIRTUALIZE(function() ballControlTick() end)))
+Bind(RunService.RenderStepped:Connect(CTN_NO_VIRTUALIZE(function() ballControlTick() end)))
+Bind(RunService.Heartbeat:Connect(CTN_NO_VIRTUALIZE(function() ballControlTick() end)))
+
+local toggleFreezeBall = CTN_JIT(function(on)
+    BALL_CTL.freeze = on
+    if on then
+        local b = findBallNow()
+        if b then
+            BALL_CTL.frozenCFrame = b.CFrame
+            BALL_CTL.frozenAnchored = b.Anchored
+        end
+        BALL_CTL._ownedNet = false
+    else
+        BALL_CTL.frozenCFrame = nil
+        BALL_CTL._ownedNet = false
+        local b = findBallNow()
+        if b then pcall(function()
+            b.Anchored = BALL_CTL.frozenAnchored or false
+            b.AssemblyLinearVelocity = Vector3.zero
+            b.AssemblyAngularVelocity = Vector3.zero
+            if b.SetNetworkOwner then pcall(function() b:SetNetworkOwner(nil) end) end
+        end) end
+        BALL_CTL.frozenAnchored = nil
+    end
+end)
+
+-- ═══ DELETE BALL ═══
+local DELETE_BALL_TARGET = Vector3.new(560.5654296875, 600.84350585938, 1582.9370117188)
+local function startDeleteBallLoop()
+    if DELETE_BALL._thread then return end
+    DELETE_BALL._thread = task.spawn(function()
+        while DELETE_BALL.enabled do
+            local Field = workspace:FindFirstChild("FootballField")
+            if Field then
+                local Ball = Field:FindFirstChild("SoccerBall")
+                if Ball then pcall(function() Ball:Destroy() end) end
+            end
+            local KickBall = ReplicatedStorage:FindFirstChild("KickBall")
+            if KickBall and (KickBall:IsA("RemoteEvent") or KickBall:IsA("UnreliableRemoteEvent")) then
+                pcall(function()
+                    KickBall:FireServer(DELETE_BALL_TARGET, DELETE_BALL_TARGET, DELETE_BALL_TARGET, 0, "djhtelkds")
+                end)
+            end
+            task.wait()
+        end
+        DELETE_BALL._thread = nil
+    end)
+end
+local function stopDeleteBallLoop()
+    DELETE_BALL.enabled = false
+    if DELETE_BALL._thread then pcall(task.cancel, DELETE_BALL._thread); DELETE_BALL._thread = nil end
+end
+local toggleDeleteBall = CTN_JIT(function(on)
+    DELETE_BALL.enabled = on
+    if on then startDeleteBallLoop() else stopDeleteBallLoop() end
+end)
+
+-- ═══ GOAL TRAINER ═══
+local function createTrainerGoal()
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return false end
+    local hrp = char.HumanoidRootPart
+    if workspace:FindFirstChild("CustomGoalPart") then workspace.CustomGoalPart:Destroy() end
+    local p = Instance.new("Part")
+    p.Name = "CustomGoalPart"
+    p.Size = Vector3.new(6, 1, 6)
+    p.Position = hrp.Position + Vector3.new(0, 0.5, 0)
+    p.Anchored = true
+    p.CanCollide = false
+    p.BrickColor = BrickColor.new("Bright blue")
+    p.Transparency = 0.4
+    p.Material = Enum.Material.Neon
+    p.Parent = workspace
+    GoalTrainer.goalPart = p
+    return true
+end
+local function trainerTeleportBall()
+    local gp = GoalTrainer.goalPart
+    if not gp or not gp.Parent then return end
+    local char = player.Character; if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart"); if not root then return end
+    local ball = findBallNow()
+    if ball then
+        local newPos = root.Position + (root.CFrame.LookVector * 4)
+        ball.CFrame = CFrame.new(newPos)
+        ball.Velocity = Vector3.new(0, 5, 0)
+    end
+end
+local function trainerTeleportPlayer()
+    local gp = GoalTrainer.goalPart
+    if not gp or not gp.Parent then return end
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    char.HumanoidRootPart.CFrame = gp.CFrame * CFrame.new(0, 3, 0)
+end
+local function startGoalTrainer()
+    if GoalTrainer.running then return false, "Already running" end
+    if not GoalTrainer.goalPart or not GoalTrainer.goalPart.Parent then return false, "Create goal first!" end
+    GoalTrainer.running = true
+    GoalTrainer.loopThread = task.spawn(function()
+        while GoalTrainer.running do
+            pcall(trainerTeleportPlayer)
+            task.wait(0.2)
+            pcall(trainerTeleportBall)
+            task.wait(0.8)
+        end
+    end)
+    return true
+end
+local function stopGoalTrainer()
+    GoalTrainer.running = false
+    if GoalTrainer.loopThread then
+        pcall(task.cancel, GoalTrainer.loopThread)
+        GoalTrainer.loopThread = nil
+    end
+end
+
+local widgetGui = Instance.new("ScreenGui")
+widgetGui.Name = "VantixHubWidgets"; widgetGui.ResetOnSpawn = false
+widgetGui.IgnoreGuiInset = true; widgetGui.DisplayOrder = 999999
+widgetGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; widgetGui.Parent = playerGui
+local widgetRefs, popupRefs = {}, {}
+local panelZCounter, activeSlider, toggleRefreshers, KEYBINDS = 190, nil, {}, {}
+
+local panelBase = function(title, W, H)
+    local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800,600)
+    W = math.min(W, vp.X - 20); H = math.min(H, vp.Y - 40)
+    local shadow = Instance.new("Frame"); shadow.Size = UDim2.fromOffset(W+8, H+8); shadow.Position = UDim2.new(0.5, -W/2-4, 0.5, -H/2-4)
+    shadow.BackgroundColor3 = Color3.new(0,0,0); shadow.BackgroundTransparency = 0.2; shadow.BorderSizePixel = 0; shadow.Visible = false
+    panelZCounter = panelZCounter + 1; shadow.ZIndex = panelZCounter-1; shadow.Parent = widgetGui
+    Instance.new("UICorner", shadow).CornerRadius = UDim.new(0,18)
+    local panel = Instance.new("Frame"); panel.Size = UDim2.fromOffset(W, H); panel.Position = UDim2.new(0.5, -W/2, 0.5, -H/2)
+    panel.BackgroundColor3 = C.BG; panel.BorderSizePixel = 0; panel.Visible = false; panel.ClipsDescendants = true
+    panelZCounter = panelZCounter + 1; panel.ZIndex = panelZCounter; panel.Parent = widgetGui
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0,14)
+    panel:GetPropertyChangedSignal("Visible"):Connect(function()
+        if panel.Visible then panelZCounter = panelZCounter + 1; panel.ZIndex = panelZCounter; shadow.ZIndex = panelZCounter - 1; shadow.Visible = true
+        else shadow.Visible = false end
+    end)
+    local hdr = Instance.new("Frame"); hdr.Size = UDim2.new(1,0,0,40); hdr.BackgroundColor3 = C.PANEL; hdr.BorderSizePixel = 0; hdr.ZIndex = panel.ZIndex+1; hdr.Parent = panel
+    Instance.new("UICorner", hdr).CornerRadius = UDim.new(0,14)
+    local hdrTxt = Instance.new("TextLabel"); hdrTxt.BackgroundTransparency = 1; hdrTxt.Size = UDim2.new(1,-50,1,0); hdrTxt.Position = UDim2.fromOffset(18,0)
+    hdrTxt.Font = Enum.Font.GothamBold; hdrTxt.TextSize = 13; hdrTxt.TextColor3 = C.ACCENT; hdrTxt.TextXAlignment = Enum.TextXAlignment.Left; hdrTxt.Text = title; hdrTxt.ZIndex = panel.ZIndex+3; hdrTxt.Parent = hdr
+    local xBtn = Instance.new("TextButton"); xBtn.Size = UDim2.fromOffset(26,26); xBtn.Position = UDim2.new(1,-34,0.5,-13)
+    xBtn.BackgroundColor3 = C.FIELD; xBtn.BorderSizePixel = 0; xBtn.Font = Enum.Font.GothamBold; xBtn.TextSize = 12; xBtn.TextColor3 = C.TEXT; xBtn.Text = "X"; xBtn.AutoButtonColor = false
+    xBtn.ZIndex = panel.ZIndex+4; xBtn.Parent = hdr; Instance.new("UICorner", xBtn).CornerRadius = UDim.new(0, 6)
+    xBtn.MouseButton1Click:Connect(CTN_NO_VIRTUALIZE(function() panel.Visible = false end))
+    local body = Instance.new("ScrollingFrame"); body.Size = UDim2.new(1,-16,1,-48); body.Position = UDim2.fromOffset(8,44)
+    body.BackgroundTransparency = 1; body.BorderSizePixel = 0; body.ScrollBarThickness = 3; body.ScrollBarImageColor3 = C.ACCENT; body.ScrollBarImageTransparency = 0.3
+    body.CanvasSize = UDim2.new(0,0,0,0); body.AutomaticCanvasSize = Enum.AutomaticSize.Y; body.ScrollingDirection = Enum.ScrollingDirection.Y
+    body.ZIndex = panel.ZIndex; body.Parent = panel
+    local pad = Instance.new("UIPadding"); pad.PaddingRight = UDim.new(0,8); pad.PaddingBottom = UDim.new(0,10); pad.PaddingTop = UDim.new(0,6); pad.PaddingLeft = UDim.new(0,4); pad.Parent = body
+    local layout = Instance.new("UIListLayout"); layout.SortOrder = Enum.SortOrder.LayoutOrder; layout.Padding = UDim.new(0,8); layout.Parent = body
+    return panel, body
+end
+
+local makeToggleRow = function(parent, label, getVal, setVal, order)
+    local row = Instance.new("Frame"); row.Size = UDim2.new(1,0,0,36); row.BackgroundColor3 = C.CARD; row.BorderSizePixel = 0; row.LayoutOrder = order; row.ZIndex = 193; row.Parent = parent
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0,10)
+    local accentBar = Instance.new("Frame"); accentBar.Size = UDim2.new(0,3,1,-12); accentBar.Position = UDim2.new(0,0,0,6); accentBar.BackgroundColor3 = C.ACCENT; accentBar.BorderSizePixel = 0; accentBar.ZIndex = 194; accentBar.Parent = row
+    Instance.new("UICorner", accentBar).CornerRadius = UDim.new(1,0)
+    local lbl = Instance.new("TextLabel"); lbl.BackgroundTransparency = 1; lbl.Size = UDim2.new(1,-96,1,0); lbl.Position = UDim2.fromOffset(16,0)
+    lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 11; lbl.TextColor3 = C.TEXT; lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.Text = label; lbl.ZIndex = 194; lbl.Parent = row
+    local btn = Instance.new("TextButton"); btn.Size = UDim2.fromOffset(58,24); btn.Position = UDim2.new(1,-66,0.5,-12); btn.BackgroundColor3 = C.FIELD; btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold; btn.TextSize = 11; btn.AutoButtonColor = false; btn.ZIndex = 194; btn.Parent = row
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,7)
+    local bs = Instance.new("UIStroke"); bs.Color = C.ACCENT; bs.Thickness = 1; bs.Transparency = 0.3; bs.Parent = btn
+    local function refresh() local on = getVal(); btn.Text = on and "ON" or "OFF"; btn.TextColor3 = on and C.ACCENT or C.DANGER; bs.Color = on and C.ACCENT or C.DANGER; accentBar.BackgroundColor3 = on and C.ACCENT or C.DANGER end
+    refresh(); table.insert(toggleRefreshers, refresh)
+    btn.MouseButton1Click:Connect(CTN_NO_VIRTUALIZE(function() setVal(not getVal()); refresh() end))
+    return refresh
+end
+
+local makeGenericSlider = function(parent, cfg)
+    local step = cfg.step or 0.1
+    local card = Instance.new("Frame"); card.Size = UDim2.new(1,0,0,54); card.BackgroundColor3 = C.CARD; card.BorderSizePixel = 0; card.LayoutOrder = cfg.order or 1; card.ZIndex = 150; card.Parent = parent
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0,10)
+    local lbl = Instance.new("TextLabel"); lbl.BackgroundTransparency = 1; lbl.Size = UDim2.new(1,-110,0,14); lbl.Position = UDim2.fromOffset(16,10)
+    lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 11; lbl.TextColor3 = C.TEXT; lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.Text = string.upper(cfg.label); lbl.ZIndex = 151; lbl.Parent = card
+    local valueBtn = Instance.new("TextButton"); valueBtn.Size = UDim2.fromOffset(64,22); valueBtn.Position = UDim2.new(1,-76,0,6); valueBtn.BackgroundColor3 = C.FIELD; valueBtn.BorderSizePixel = 0
+    valueBtn.Font = Enum.Font.GothamBold; valueBtn.TextSize = 11; valueBtn.TextColor3 = C.ACCENT; valueBtn.Text = cfg.fmt(cfg.default); valueBtn.AutoButtonColor = false; valueBtn.ZIndex = 152; valueBtn.Parent = card
+    Instance.new("UICorner", valueBtn).CornerRadius = UDim.new(0,7)
+    local track = Instance.new("TextButton"); track.Size = UDim2.new(1,-32,0,4); track.Position = UDim2.new(0,16,0,40); track.BackgroundColor3 = C.TRACK; track.BorderSizePixel = 0
+    track.Text = ""; track.AutoButtonColor = false; track.ZIndex = 151; track.Parent = card
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
+    local fill = Instance.new("Frame"); fill.Size = UDim2.new(0,0,1,0); fill.BackgroundColor3 = C.ACCENT; fill.BorderSizePixel = 0; fill.ZIndex = 152; fill.Parent = track
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+    local knob = Instance.new("Frame"); knob.Size = UDim2.fromOffset(14,14); knob.AnchorPoint = Vector2.new(0.5,0.5); knob.Position = UDim2.new(0,0,0.5,0); knob.BackgroundColor3 = C.TEXT; knob.BorderSizePixel = 0; knob.ZIndex = 153; knob.Parent = track
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1,0)
+    local current = cfg.default
+    local sid = "sl_"..tostring(math.random(1,999999))
+    local function render() local pct = (current-cfg.min)/(cfg.max-cfg.min); fill.Size = UDim2.new(pct,0,1,0); knob.Position = UDim2.new(pct,0,0.5,0); valueBtn.Text = cfg.fmt(current) end
+    local function setV(v,fire) v = math.clamp(v, cfg.min, cfg.max); local s = math.floor(v/step+0.5)*step; if s~=current then current=s; render(); if fire and cfg.onChange then cfg.onChange(current) end else render() end end
+    local function onSlide(input)
+        if activeSlider~=sid then return end
+        local rp,rs = track.AbsolutePosition, track.AbsoluteSize; if rs.X<=0 then return end
+        setV(cfg.min+(cfg.max-cfg.min)*math.clamp((input.Position.X-rp.X)/rs.X, 0, 1), true)
+    end
+    track.InputBegan:Connect(CTN_NO_VIRTUALIZE(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then activeSlider=sid; onSlide(input) end end))
+    UserInputService.InputChanged:Connect(CTN_NO_VIRTUALIZE(function(input) if activeSlider==sid and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then onSlide(input) end end))
+    UserInputService.InputEnded:Connect(CTN_NO_VIRTUALIZE(function(input) if (input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch) and activeSlider==sid then activeSlider=nil end end))
+    render()
+    if cfg.id then cfg._setter = setV end
+end
+
+local makeKeybindRow = function(parent, order, widgetId)
+    local row = Instance.new("Frame"); row.Size = UDim2.new(1,0,0,36); row.BackgroundColor3 = C.CARD; row.BorderSizePixel = 0; row.LayoutOrder = order; row.ZIndex = 193; row.Parent = parent
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0,10)
+    local lbl = Instance.new("TextLabel"); lbl.BackgroundTransparency = 1; lbl.Size = UDim2.new(1,-130,1,0); lbl.Position = UDim2.fromOffset(16,0)
+    lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 11; lbl.TextColor3 = C.TEXT; lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.Text = "KEYBIND"; lbl.ZIndex = 194; lbl.Parent = row
+    local btn = Instance.new("TextButton"); btn.Size = UDim2.fromOffset(100,24); btn.Position = UDim2.new(1,-108,0.5,-12); btn.BackgroundColor3 = C.FIELD; btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold; btn.TextSize = 11; btn.AutoButtonColor = false; btn.ZIndex = 194; btn.Parent = row
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,7)
+    local listening = false; local listenConn
+    local function refresh() if listening then btn.Text = "PRESS..."; btn.TextColor3 = C.ACCENT else local b = KEYBINDS[widgetId]; btn.Text = b and b.keyCode.Name or "NONE"; btn.TextColor3 = b and C.ACCENT or C.MUTED end end
+    btn.MouseButton1Click:Connect(function()
+        if listening then listening = false; if listenConn then listenConn:Disconnect(); listenConn = nil end; refresh(); return end
+        listening = true; refresh(); if listenConn then listenConn:Disconnect() end
+        listenConn = UserInputService.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then return end
+            KEYBINDS[widgetId] = {inputType = input.UserInputType, keyCode = input.KeyCode}
+            listening = false; if listenConn then listenConn:Disconnect(); listenConn = nil end; refresh()
+        end)
+    end)
+    refresh()
+end
+
+local makeAimPanel = function()
+    local panel, body = panelBase("AIMBOT", 360, 720)
+    makeToggleRow(body, "ENABLE AIMBOT", function() return aimbotConfig.enabled end, function(v) aimbotConfig.enabled = v end, 1)
+    local modeRow = Instance.new("Frame"); modeRow.Size = UDim2.new(1,0,0,36); modeRow.BackgroundColor3 = C.CARD; modeRow.BorderSizePixel = 0; modeRow.LayoutOrder = 2; modeRow.ZIndex = 193; modeRow.Parent = body
+    Instance.new("UICorner", modeRow).CornerRadius = UDim.new(0,10)
+    local mrl = Instance.new("TextLabel"); mrl.BackgroundTransparency = 1; mrl.Size = UDim2.new(1,-150,1,0); mrl.Position = UDim2.fromOffset(16,0)
+    mrl.Font = Enum.Font.GothamBold; mrl.TextSize = 11; mrl.TextColor3 = C.TEXT; mrl.TextXAlignment = Enum.TextXAlignment.Left; mrl.Text = "TARGETING"; mrl.ZIndex = 194; mrl.Parent = modeRow
+    local modeBtn = Instance.new("TextButton"); modeBtn.Size = UDim2.new(0,140,0,24); modeBtn.Position = UDim2.new(1,-150,0.5,-12); modeBtn.BackgroundColor3 = C.FIELD; modeBtn.BorderSizePixel = 0
+    modeBtn.Font = Enum.Font.GothamBold; modeBtn.TextSize = 11; modeBtn.TextColor3 = C.ACCENT; modeBtn.Text = S.AB_TARGET_MODE; modeBtn.AutoButtonColor = false; modeBtn.ZIndex = 194; modeBtn.Parent = modeRow
+    Instance.new("UICorner", modeBtn).CornerRadius = UDim.new(0,7)
+    local gridCard = Instance.new("Frame"); gridCard.Size = UDim2.new(1,0,0,242); gridCard.BackgroundColor3 = C.CARD; gridCard.BorderSizePixel = 0; gridCard.LayoutOrder = 3; gridCard.ZIndex = 193
+    gridCard.Parent = body; gridCard.Visible = (S.AB_TARGET_MODE == "Precise")
+    Instance.new("UICorner", gridCard).CornerRadius = UDim.new(0,10)
+    local gridTitle = Instance.new("TextLabel"); gridTitle.Text = "⚽ PRECISE TARGET"; gridTitle.Size = UDim2.new(1,-20,0,18); gridTitle.Position = UDim2.new(0,12,0,6)
+    gridTitle.BackgroundTransparency = 1; gridTitle.Font = Enum.Font.GothamBold; gridTitle.TextSize = 11; gridTitle.TextColor3 = C.ACCENT; gridTitle.TextXAlignment = Enum.TextXAlignment.Left; gridTitle.ZIndex = 194; gridTitle.Parent = gridCard
+    local clearBtn = Instance.new("TextButton"); clearBtn.Size = UDim2.fromOffset(54,18); clearBtn.Position = UDim2.new(1,-64,0,5); clearBtn.BackgroundColor3 = C.FIELD; clearBtn.BorderSizePixel = 0
+    clearBtn.Font = Enum.Font.GothamBold; clearBtn.TextSize = 9; clearBtn.TextColor3 = C.DANGER; clearBtn.Text = "CLEAR"; clearBtn.AutoButtonColor = false; clearBtn.ZIndex = 194; clearBtn.Parent = gridCard
+    Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0,5)
+    local goalOuter = Instance.new("Frame"); goalOuter.Size = UDim2.new(1,-24,0,206); goalOuter.Position = UDim2.new(0,12,0,28); goalOuter.BackgroundColor3 = C.GOAL_SKY; goalOuter.BorderSizePixel = 0; goalOuter.ClipsDescendants = true; goalOuter.ZIndex = 194; goalOuter.Parent = gridCard
+    Instance.new("UICorner", goalOuter).CornerRadius = UDim.new(0,4)
+    local grass = Instance.new("Frame"); grass.Size = UDim2.new(1,0,0,18); grass.Position = UDim2.new(0,0,1,-18); grass.BackgroundColor3 = C.GRASS; grass.BorderSizePixel = 0; grass.ZIndex = 195; grass.Parent = goalOuter
+    local POST_THICK = 5
+    local topBar = Instance.new("Frame"); topBar.Size = UDim2.new(1,0,0,POST_THICK); topBar.BackgroundColor3 = C.POST; topBar.BorderSizePixel = 0; topBar.ZIndex = 200; topBar.Parent = goalOuter
+    local leftPost = Instance.new("Frame"); leftPost.Size = UDim2.new(0,POST_THICK,1,-18); leftPost.BackgroundColor3 = C.POST; leftPost.BorderSizePixel = 0; leftPost.ZIndex = 200; leftPost.Parent = goalOuter
+    local rightPost = Instance.new("Frame"); rightPost.Size = UDim2.new(0,POST_THICK,1,-18); rightPost.Position = UDim2.new(1,-POST_THICK,0,0); rightPost.BackgroundColor3 = C.POST; rightPost.BorderSizePixel = 0; rightPost.ZIndex = 200; rightPost.Parent = goalOuter
+    local netArea = Instance.new("Frame"); netArea.Size = UDim2.new(1,-POST_THICK*2,1,-POST_THICK-18); netArea.Position = UDim2.new(0,POST_THICK,0,POST_THICK); netArea.BackgroundColor3 = Color3.fromRGB(16, 24, 40); netArea.BackgroundTransparency = 0.4; netArea.BorderSizePixel = 0; netArea.ClipsDescendants = true; netArea.ZIndex = 196; netArea.Parent = goalOuter
+    for i=-12,12 do
+        local slash = Instance.new("Frame"); slash.AnchorPoint = Vector2.new(0.5,0.5); slash.Size = UDim2.new(0, 600, 0, 1); slash.Position = UDim2.new(0.5, i*30, 0.5, 0); slash.Rotation = 45; slash.BackgroundColor3 = C.NET_LINE; slash.BackgroundTransparency = 0.82; slash.BorderSizePixel = 0; slash.ZIndex = 197; slash.Parent = netArea
+        local backslash = Instance.new("Frame"); backslash.AnchorPoint = Vector2.new(0.5,0.5); backslash.Size = UDim2.new(0, 600, 0, 1); backslash.Position = UDim2.new(0.5, i*30, 0.5, 0); backslash.Rotation = -45; backslash.BackgroundColor3 = C.NET_LINE; backslash.BackgroundTransparency = 0.82; backslash.BorderSizePixel = 0; backslash.ZIndex = 197; backslash.Parent = netArea
+    end
+    local clickArea = Instance.new("TextButton"); clickArea.Size = UDim2.fromScale(1, 1); clickArea.BackgroundTransparency = 1; clickArea.Text = ""; clickArea.ZIndex = 210; clickArea.Active = true; clickArea.AutoButtonColor = false; clickArea.Parent = netArea
+    local ballFolder = Instance.new("Folder"); ballFolder.Parent = netArea
+    local renderDots = function()
+        for _, c in ipairs(ballFolder:GetChildren()) do c:Destroy() end
+        for _, dot in ipairs(AB_PRECISE_DOTS) do
+            local lbl = Instance.new("TextLabel"); lbl.Text = "⚽"; lbl.TextSize = 16; lbl.BackgroundTransparency = 1; lbl.AnchorPoint = Vector2.new(0.5, 0.5)
+            lbl.Position = UDim2.fromScale(dot.x, dot.y); lbl.Size = UDim2.fromOffset(20, 20); lbl.ZIndex = 211; lbl.Parent = ballFolder
+        end
+        gridTitle.Text = string.format("⚽ PRECISE TARGET (%d/10)", #AB_PRECISE_DOTS)
+    end
+    clickArea.InputBegan:Connect(CTN_NO_VIRTUALIZE(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        local rx = (input.Position.X - clickArea.AbsolutePosition.X) / clickArea.AbsoluteSize.X
+        local ry = (input.Position.Y - clickArea.AbsolutePosition.Y) / clickArea.AbsoluteSize.Y
+        if rx < 0 or rx > 1 or ry < 0 or ry > 1 then return end
+        local gx = math.floor(rx * 15); local gy = math.floor(ry * 10); local fx = (gx + 0.5) / 15; local fy = (gy + 0.5) / 10
+        local found = nil
+        for i, d in ipairs(AB_PRECISE_DOTS) do if math.abs(d.x - fx) < 0.01 and math.abs(d.y - fy) < 0.01 then found = i; break end end
+        if found then table.remove(AB_PRECISE_DOTS, found)
+        elseif #AB_PRECISE_DOTS < 10 then table.insert(AB_PRECISE_DOTS, {x = fx, y = fy}) end
+        renderDots()
+    end))
+    clearBtn.MouseButton1Click:Connect(function() for i=#AB_PRECISE_DOTS,1,-1 do table.remove(AB_PRECISE_DOTS, i) end; renderDots() end)
+    renderDots()
+    makeToggleRow(body, "CURVE AIMBOT", function() return aimbotConfig.curveEnabled end, function(v) aimbotConfig.curveEnabled = v end, 4)
+    makeToggleRow(body, "TOP CORNER MODE", function() return aimbotConfig.topCornerMode end, function(v) aimbotConfig.topCornerMode = v end, 5)
+    makeGenericSlider(body, {label="Curve Power", order=6, default=aimbotConfig.curvePower, min=5, max=50, step=1, fmt=function(v) return string.format("%.0f", v) end, onChange=function(v) aimbotConfig.curvePower = v end})
+    makeGenericSlider(body, {label="Max Kick Power", order=7, default=aimbotConfig.maxPower, min=20, max=150, step=1, fmt=function(v) return string.format("%.0f", v) end, onChange=function(v) aimbotConfig.maxPower = v end})
+    local cycleMode = function(dir)
+        dir = dir or 1; local idx = 1; for i,m in ipairs(AB_MODE_LIST) do if m==S.AB_TARGET_MODE then idx=i; break end end
+        idx = idx + dir; if idx > #AB_MODE_LIST then idx = 1 end; if idx < 1 then idx = #AB_MODE_LIST end
+        S.AB_TARGET_MODE = AB_MODE_LIST[idx]
+        modeBtn.Text = S.AB_TARGET_MODE
+        gridCard.Visible = (S.AB_TARGET_MODE == "Precise")
+        renderDots()
+    end
+    modeBtn.MouseButton1Click:Connect(function() cycleMode(1) end)
+    modeBtn.MouseButton2Click:Connect(function() cycleMode(-1) end)
+    return {frame=panel, toggle=function() panel.Visible = not panel.Visible end, renderDots=renderDots,
+        refreshMode=function() modeBtn.Text = S.AB_TARGET_MODE; gridCard.Visible = (S.AB_TARGET_MODE == "Precise"); renderDots() end}
+end
+
+local makeToggleReachPanel = function()
+    local panel, body = panelBase("TOGGLE REACH", 300, 260)
+    makeGenericSlider(body, {label="Toggle Reach", order=1, default=S.TOGGLE_REACH, min=4.1, max=7.0, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.TOGGLE_REACH = v end})
+    makeKeybindRow(body, 2, "toggle")
+    makeToggleRow(body, "REACH PRIORITY", function() return RC.priorityEnabled end, function(v) RC.priorityEnabled = v end, 3)
+    return {frame=panel, toggle=function() panel.Visible = not panel.Visible end}
+end
+local makeSneakyPanel = function()
+    local panel, body = panelBase("AUTO SNEAKY", 280, 240)
+    makeGenericSlider(body, {label="Reach", order=1, default=S.SNEAKY_REACH, min=4.1, max=7.0, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.SNEAKY_REACH = v end})
+    makeGenericSlider(body, {label="Buffer", order=2, default=S.SNEAKY_BUFFER, min=0, max=2, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.SNEAKY_BUFFER = v end})
+    makeGenericSlider(body, {label="Y-Drop", order=3, default=S.SNEAKY_HITBOX_DROP, min=-3, max=3, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.SNEAKY_HITBOX_DROP = v end})
+    return {frame=panel, toggle=function() panel.Visible = not panel.Visible end}
+end
+local makeJugglePanel = function()
+    local panel, body = panelBase("AUTO JUGGLE", 280, 210)
+    makeGenericSlider(body, {label="Reach", order=1, default=getgenv().AutoJuggleV1.reach, min=4.1, max=7.5, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) getgenv().AutoJuggleV1.reach = v end})
+    makeGenericSlider(body, {label="Pull Offset", order=2, default=getgenv().AutoJuggleV1.pullOffset, min=0.01, max=0.5, step=0.01, fmt=function(v) return string.format("%.2f", v) end, onChange=function(v) getgenv().AutoJuggleV1.pullOffset = v end})
+    return {frame=panel, toggle=function() panel.Visible = not panel.Visible end}
+end
+local makeGKPanel = function()
+    local panel, body = panelBase("AUTO GK", 280, 460)
+    makeToggleRow(body, "AUTO GK", function() return S.GK_AUTO_ON end, function(v) S.GK_AUTO_ON = v end, 1)
+    makeToggleRow(body, "AUTO GROUND SAVE", function() return S.GK_GROUNDSAVE_ON end, function(v) S.GK_GROUNDSAVE_ON = v end, 2)
+    makeGenericSlider(body, {label="Reach", order=3, default=S.GK_REACH, min=4.1, max=7, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.GK_REACH = v end})
+    makeGenericSlider(body, {label="Emergency Reach", order=4, default=S.GK_EMERGENCY_ADD, min=0, max=2, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.GK_EMERGENCY_ADD = v end})
+    makeGenericSlider(body, {label="Dive Speed", order=5, default=S.GK_DIVE_SPEED, min=10, max=60, step=0.5, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.GK_DIVE_SPEED = v end})
+    makeGenericSlider(body, {label="Jump React", order=6, default=S.GK_JUMP_REACT, min=0.1, max=1.0, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.GK_JUMP_REACT = v end})
+    makeGenericSlider(body, {label="Save React", order=7, default=S.GK_SAVE_REACT, min=0.5, max=3.0, step=0.1, fmt=function(v) return string.format("%.1f", v) end, onChange=function(v) S.GK_SAVE_REACT = v end})
+    return {frame=panel, toggle=function() panel.Visible = not panel.Visible end}
+end
+
+local makeAimPassPanel = function()
+    local panel, body = panelBase("AIM PASS", 320, 520)
+    makeToggleRow(body, "ENABLE AIM PASS", function() return AP.enabled end, function(v) AP.enabled = v end, 1)
+    makeToggleRow(body, "TEAMMATES ONLY", function() return AP.teammatesOnly end, function(v)
+        AP.teammatesOnly = v
+        if v and AP.targetName then
+            local p = Players:FindFirstChild(AP.targetName)
+            if p and not isPlayerEligibleForPass(p) then AP.targetName = nil end
+        end
+        if popupRefs.aimpass and popupRefs.aimpass.refresh then pcall(popupRefs.aimpass.refresh) end
+    end, 2)
+    local modeRow = Instance.new("Frame"); modeRow.Size = UDim2.new(1,0,0,36); modeRow.BackgroundColor3 = C.CARD; modeRow.BorderSizePixel = 0; modeRow.LayoutOrder = 3; modeRow.ZIndex = 193; modeRow.Parent = body
+    Instance.new("UICorner", modeRow).CornerRadius = UDim.new(0,10)
+    local mrl = Instance.new("TextLabel"); mrl.BackgroundTransparency = 1; mrl.Size = UDim2.new(1,-150,1,0); mrl.Position = UDim2.fromOffset(16,0)
+    mrl.Font = Enum.Font.GothamBold; mrl.TextSize = 11; mrl.TextColor3 = C.TEXT; mrl.TextXAlignment = Enum.TextXAlignment.Left; mrl.Text = "MODE"; mrl.ZIndex = 194; mrl.Parent = modeRow
+    local modeBtn = Instance.new("TextButton"); modeBtn.Size = UDim2.new(0,140,0,24); modeBtn.Position = UDim2.new(1,-150,0.5,-12); modeBtn.BackgroundColor3 = C.FIELD; modeBtn.BorderSizePixel = 0
+    modeBtn.Font = Enum.Font.GothamBold; modeBtn.TextSize = 11; modeBtn.TextColor3 = C.ACCENT; modeBtn.Text = AP.mode; modeBtn.AutoButtonColor = false; modeBtn.ZIndex = 194; modeBtn.Parent = modeRow
+    Instance.new("UICorner", modeBtn).CornerRadius = UDim.new(0,7)
+    local posRow = Instance.new("Frame"); posRow.Size = UDim2.new(1,0,0,36); posRow.BackgroundColor3 = C.CARD; posRow.BorderSizePixel = 0; posRow.LayoutOrder = 4; posRow.ZIndex = 193; posRow.Parent = body
+    posRow.Visible = (AP.mode == "POSITION")
+    Instance.new("UICorner", posRow).CornerRadius = UDim.new(0,10)
+    local prl = Instance.new("TextLabel"); prl.BackgroundTransparency = 1; prl.Size = UDim2.new(1,-150,1,0); prl.Position = UDim2.fromOffset(16,0)
+    prl.Font = Enum.Font.GothamBold; prl.TextSize = 11; prl.TextColor3 = C.TEXT; prl.TextXAlignment = Enum.TextXAlignment.Left; prl.Text = "POSITION"; prl.ZIndex = 194; prl.Parent = posRow
+    local posBtn = Instance.new("TextButton"); posBtn.Size = UDim2.new(0,140,0,24); posBtn.Position = UDim2.new(1,-150,0.5,-12); posBtn.BackgroundColor3 = C.FIELD; posBtn.BorderSizePixel = 0
+    posBtn.Font = Enum.Font.GothamBold; posBtn.TextSize = 11; posBtn.TextColor3 = C.ACCENT; posBtn.Text = AP.position; posBtn.AutoButtonColor = false; posBtn.ZIndex = 194; posBtn.Parent = posRow
+    Instance.new("UICorner", posBtn).CornerRadius = UDim.new(0,7)
+    local targetRow = Instance.new("Frame"); targetRow.Size = UDim2.new(1,0,0,36); targetRow.BackgroundColor3 = C.CARD; targetRow.BorderSizePixel = 0; targetRow.LayoutOrder = 5; targetRow.ZIndex = 193; targetRow.Parent = body
+    targetRow.Visible = (AP.mode == "PLAYER")
+    Instance.new("UICorner", targetRow).CornerRadius = UDim.new(0,10)
+    local trl = Instance.new("TextLabel"); trl.BackgroundTransparency = 1; trl.Size = UDim2.new(1,-150,1,0); trl.Position = UDim2.fromOffset(16,0)
+    trl.Font = Enum.Font.GothamBold; trl.TextSize = 11; trl.TextColor3 = C.TEXT; trl.TextXAlignment = Enum.TextXAlignment.Left; trl.Text = "TARGET PLAYER"; trl.ZIndex = 194; trl.Parent = targetRow
+    local targetBtn = Instance.new("TextButton"); targetBtn.Size = UDim2.new(0,140,0,24); targetBtn.Position = UDim2.new(1,-150,0.5,-12); targetBtn.BackgroundColor3 = C.FIELD; targetBtn.BorderSizePixel = 0
+    targetBtn.Font = Enum.Font.GothamBold; targetBtn.TextSize = 11; targetBtn.TextColor3 = C.ACCENT; targetBtn.Text = AP.targetName or "NONE"; targetBtn.AutoButtonColor = false; targetBtn.ZIndex = 194; targetBtn.Parent = targetRow
+    Instance.new("UICorner", targetBtn).CornerRadius = UDim.new(0,7)
+    local function refreshTargetBtn() targetBtn.Text = AP.targetName or "NONE" end
+    targetBtn.MouseButton1Click:Connect(function()
+        local list = getEligiblePlayersForPass()
+        if #list == 0 then AP.targetName = nil; refreshTargetBtn(); return end
+        local idx = 0
+        for i, p in ipairs(list) do if p.Name == AP.targetName then idx = i; break end end
+        idx = idx % #list + 1
+        AP.targetName = list[idx].Name
+        refreshTargetBtn()
+    end)
+    makeToggleRow(body, "Player ESP", function() return AP.outlineTarget end, function(v) AP.outlineTarget = v end, 6)
+    makeToggleRow(body, "RANDOM SPIN", function() return AP.spinEnabled end, function(v) AP.spinEnabled = v end, 7)
+    local blHeader = Instance.new("Frame"); blHeader.Size = UDim2.new(1,0,0,26); blHeader.BackgroundTransparency = 1; blHeader.LayoutOrder = 90; blHeader.ZIndex = 193; blHeader.Parent = body
+    local blTitle = Instance.new("TextLabel"); blTitle.BackgroundTransparency = 1; blTitle.Size = UDim2.new(1,-80,1,0); blTitle.Position = UDim2.fromOffset(4,0)
+    blTitle.Font = Enum.Font.GothamBold; blTitle.TextSize = 10; blTitle.TextColor3 = C.ACCENT; blTitle.TextXAlignment = Enum.TextXAlignment.Left; blTitle.Text = "BLACKLIST (tap to toggle)"; blTitle.ZIndex = 194; blTitle.Parent = blHeader
+    local blRefresh = Instance.new("TextButton"); blRefresh.Size = UDim2.fromOffset(64,20); blRefresh.Position = UDim2.new(1,-68,0.5,-10); blRefresh.BackgroundColor3 = C.FIELD; blRefresh.BorderSizePixel = 0
+    blRefresh.Font = Enum.Font.GothamBold; blRefresh.TextSize = 9; blRefresh.TextColor3 = C.ACCENT; blRefresh.Text = "REFRESH"; blRefresh.AutoButtonColor = false; blRefresh.ZIndex = 194; blRefresh.Parent = blHeader
+    Instance.new("UICorner", blRefresh).CornerRadius = UDim.new(0,5)
+    local blacklistRows = {}
+    local function refreshBlacklistUI()
+        for _, r in ipairs(blacklistRows) do pcall(function() r:Destroy() end) end
+        blacklistRows = {}
+        local order = 100
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player then
+                order = order + 1
+                local row = Instance.new("Frame"); row.Size = UDim2.new(1,0,0,32); row.BackgroundColor3 = C.CARD; row.BorderSizePixel = 0
+                row.LayoutOrder = order; row.ZIndex = 193; row.Parent = body
+                Instance.new("UICorner", row).CornerRadius = UDim.new(0,8)
+                local nameLbl = Instance.new("TextLabel"); nameLbl.BackgroundTransparency = 1; nameLbl.Size = UDim2.new(1,-100,1,0); nameLbl.Position = UDim2.fromOffset(12,0)
+                nameLbl.Font = Enum.Font.GothamBold; nameLbl.TextSize = 10; nameLbl.TextColor3 = C.TEXT; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+                nameLbl.Text = p.Name; nameLbl.ZIndex = 194; nameLbl.Parent = row
+                local btn = Instance.new("TextButton"); btn.Size = UDim2.fromOffset(84,22); btn.Position = UDim2.new(1,-92,0.5,-11); btn.BackgroundColor3 = C.FIELD; btn.BorderSizePixel = 0
+                btn.Font = Enum.Font.GothamBold; btn.TextSize = 9; btn.AutoButtonColor = false; btn.ZIndex = 194; btn.Parent = row
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+                local function refreshBtn()
+                    if AP.blacklist[p.Name] then
+                        btn.Text = "BLACKLISTED"; btn.TextColor3 = C.DANGER
+                    else
+                        btn.Text = "ALLOW"; btn.TextColor3 = C.ACCENT
+                    end
+                end
+                refreshBtn()
+                btn.MouseButton1Click:Connect(function()
+                    if AP.blacklist[p.Name] then AP.blacklist[p.Name] = nil else AP.blacklist[p.Name] = true end
+                    refreshBtn()
+                    if AP.targetName == p.Name and AP.blacklist[p.Name] then
+                        AP.targetName = nil; refreshTargetBtn()
+                    end
+                end)
+                table.insert(blacklistRows, row)
+            end
+        end
+    end
+    blRefresh.MouseButton1Click:Connect(refreshBlacklistUI)
+    refreshBlacklistUI()
+    local MODES = {"PLAYER","POSITION","FURTHEST","CLOSEST"}
+    local POSITIONS = {"ST","LW","RW","CDM","RANDOM"}
+    modeBtn.MouseButton1Click:Connect(function()
+        local idx = 1; for i,m in ipairs(MODES) do if m==AP.mode then idx=i; break end end
+        idx = idx % #MODES + 1; AP.mode = MODES[idx]; modeBtn.Text = AP.mode
+        posRow.Visible = (AP.mode == "POSITION")
+        targetRow.Visible = (AP.mode == "PLAYER")
+    end)
+    posBtn.MouseButton1Click:Connect(function()
+        local idx = 1; for i,m in ipairs(POSITIONS) do if m==AP.position then idx=i; break end end
+        idx = idx % #POSITIONS + 1; AP.position = POSITIONS[idx]; posBtn.Text = AP.position
+    end)
+    local function refresh()
+        modeBtn.Text = AP.mode
+        posBtn.Text = AP.position
+        refreshTargetBtn()
+        posRow.Visible = (AP.mode == "POSITION")
+        targetRow.Visible = (AP.mode == "PLAYER")
+        refreshBlacklistUI()
+    end
+    return {frame=panel, toggle=function() panel.Visible = not panel.Visible end,
+        refresh = refresh, refreshBlacklist = refreshBlacklistUI, refreshTarget = refreshTargetBtn}
+end
+
+popupRefs.sneaky = makeSneakyPanel()
+popupRefs.juggle = makeJugglePanel()
+popupRefs.toggle = makeToggleReachPanel()
+popupRefs.gk = makeGKPanel()
+popupRefs.aim = makeAimPanel()
+popupRefs.aimpass = makeAimPassPanel()
+
+UserInputService.InputBegan:Connect(CTN_NO_VIRTUALIZE(function(input, gp)
+    if gp or UserInputService:GetFocusedTextBox() then return end
+    for id, b in pairs(KEYBINDS) do
+        if b and input.UserInputType == b.inputType and input.KeyCode == b.keyCode then
+            if id == "toggle" and widgetRefs.toggle then widgetRefs.toggle.toggle() end
+            break
+        end
+    end
+end))
+
+local makeWidget = function(cfg)
+    local BASE_W, BASE_H = 180, 46
+    local currentScale = WIDGET_SCALE or 1.0
+    local vpW = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize.X or 800
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.fromOffset(BASE_W, BASE_H)
+    btn.Position = UDim2.new(0, vpW - BASE_W - 24, 0, cfg.y or 24)
+    btn.BackgroundColor3 = C.PANEL; btn.BorderSizePixel = 0; btn.Text = ""
+    btn.AutoButtonColor = false; btn.ZIndex = 5; btn.Visible = false; btn.Parent = widgetGui
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    local grad = Instance.new("UIGradient")
+    grad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, C.WIDGET_TOP), ColorSequenceKeypoint.new(1, C.PANEL)})
+    grad.Rotation = 90; grad.Parent = btn
+    local stroke = Instance.new("UIStroke"); stroke.Color = cfg.color; stroke.Thickness = 1.5; stroke.Transparency = 0.2; stroke.Parent = btn
+    local elements = {}
+    local function track(el, baseSize, basePos, baseTextSize) table.insert(elements, {el=el, size=baseSize, pos=basePos, ts=baseTextSize}) end
+    local iconBg = Instance.new("Frame"); iconBg.Size = UDim2.fromOffset(26, 26); iconBg.Position = UDim2.new(0, 10, 0.5, -13)
+    iconBg.BackgroundColor3 = cfg.color; iconBg.BackgroundTransparency = 0.82; iconBg.BorderSizePixel = 0; iconBg.ZIndex = 7; iconBg.Parent = btn
+    Instance.new("UICorner", iconBg).CornerRadius = UDim.new(1, 0); track(iconBg, UDim2.fromOffset(26,26), UDim2.new(0,10,0.5,-13))
+    local iconLetter = Instance.new("TextLabel"); iconLetter.BackgroundTransparency = 1; iconLetter.Size = UDim2.fromScale(1, 1)
+    iconLetter.Font = Enum.Font.GothamBlack; iconLetter.TextSize = 12; iconLetter.TextColor3 = cfg.color; iconLetter.Text = cfg.icon
+    iconLetter.ZIndex = 8; iconLetter.Parent = iconBg; track(iconLetter, nil, nil, 12)
+    local dot = Instance.new("Frame"); dot.Size = UDim2.fromOffset(7, 7); dot.Position = UDim2.new(0, 8, 1, -13)
+    dot.BackgroundColor3 = cfg.color; dot.BorderSizePixel = 0; dot.ZIndex = 9; dot.Parent = btn
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0); track(dot, UDim2.fromOffset(7,7), UDim2.new(0,8,1,-13))
+    local nameLbl = Instance.new("TextLabel"); nameLbl.BackgroundTransparency = 1; nameLbl.Size = UDim2.new(1, -90, 0, 14); nameLbl.Position = UDim2.fromOffset(44, 7)
+    nameLbl.Font = Enum.Font.GothamBold; nameLbl.TextSize = 11; nameLbl.TextColor3 = C.TEXT; nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.Text = cfg.titleOn; nameLbl.ZIndex = 8; nameLbl.Parent = btn; track(nameLbl, nil, UDim2.fromOffset(44,7), 11)
+    local statusLbl = Instance.new("TextLabel"); statusLbl.BackgroundTransparency = 1; statusLbl.Size = UDim2.new(1, -90, 0, 10); statusLbl.Position = UDim2.fromOffset(44, 24)
+    statusLbl.Font = Enum.Font.GothamBlack; statusLbl.TextSize = 8; statusLbl.TextColor3 = cfg.color; statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+    statusLbl.Text = "ON · 3x TAP TO EDIT"; statusLbl.ZIndex = 8; statusLbl.Parent = btn; track(statusLbl, nil, UDim2.fromOffset(44,24), 8)
+    local lockBtn = Instance.new("TextButton"); lockBtn.Size = UDim2.fromOffset(24, 22); lockBtn.Position = UDim2.new(1, -30, 0.5, -11)
+    lockBtn.BackgroundColor3 = C.FIELD; lockBtn.BorderSizePixel = 0; lockBtn.Font = Enum.Font.GothamBold; lockBtn.TextSize = 12
+    lockBtn.TextColor3 = C.MUTED; lockBtn.Text = UNLOCK_ICON; lockBtn.AutoButtonColor = false; lockBtn.ZIndex = 10; lockBtn.Parent = btn
+    Instance.new("UICorner", lockBtn).CornerRadius = UDim.new(0, 6); track(lockBtn, UDim2.fromOffset(24,22), UDim2.new(1,-30,0.5,-11), 12)
+    local applyScale = function(s)
+        currentScale = s
+        btn.Size = UDim2.fromOffset(BASE_W * s, BASE_H * s)
+        for _, e in ipairs(elements) do
+            pcall(function()
+                if e.size then e.el.Size = UDim2.fromOffset(math.floor(e.size.X.Offset * s + 0.5), math.floor(e.size.Y.Offset * s + 0.5)) end
+                if e.pos then e.el.Position = UDim2.new(e.pos.X.Scale, math.floor(e.pos.X.Offset * s + 0.5), e.pos.Y.Scale, math.floor(e.pos.Y.Offset * s + 0.5)) end
+                if e.ts and e.el.TextSize then e.el.TextSize = math.max(1, math.floor(e.ts * s + 0.5)) end
+            end)
+        end
+    end
+    local locked = false
+    local d = {dragging=false, moved=false, sx=0, sy=0, tx=0, ty=0}
+    btn.InputBegan:Connect(CTN_NO_VIRTUALIZE(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if UserInputService:GetFocusedTextBox() then return end
+            if locked then d.moved = false; return end
+            d.dragging = true; d.moved = false; d.sx = input.Position.X; d.sy = input.Position.Y
+            d.tx = btn.Position.X.Offset; d.ty = btn.Position.Y.Offset
+        end
+    end))
+    UserInputService.InputChanged:Connect(CTN_NO_VIRTUALIZE(function(input)
+        if d.dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local nx = d.tx + (input.Position.X - d.sx); local ny = d.ty + (input.Position.Y - d.sy)
+            if math.abs(input.Position.X - d.sx) > 4 or math.abs(input.Position.Y - d.sy) > 4 then d.moved = true end
+            local vp2 = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800,600)
+            nx = math.clamp(nx, 4, vp2.X - btn.Size.X.Offset - 4); ny = math.clamp(ny, 4, vp2.Y - btn.Size.Y.Offset - 4)
+            btn.Position = UDim2.new(0, nx, 0, ny)
+        end
+    end))
+    UserInputService.InputEnded:Connect(CTN_NO_VIRTUALIZE(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then d.dragging = false end end))
+    lockBtn.MouseButton1Click:Connect(CTN_NO_VIRTUALIZE(function()
+        locked = not locked
+        if locked then lockBtn.Text = LOCK_ICON; lockBtn.TextColor3 = C.LOCK else lockBtn.Text = UNLOCK_ICON; lockBtn.TextColor3 = C.MUTED end
+    end))
+    local active = cfg.defaultActive == true
+    local function refreshVisual()
+        if active then
+            stroke.Color = C.SUCCESS; dot.BackgroundColor3 = cfg.color
+            iconBg.BackgroundColor3 = cfg.color; iconBg.BackgroundTransparency = 0.82; iconLetter.TextColor3 = cfg.color
+            statusLbl.Text = "ON · 3x TAP TO EDIT"; statusLbl.TextColor3 = C.SUCCESS; nameLbl.Text = cfg.titleOn
+        else
+            stroke.Color = C.DANGER; dot.BackgroundColor3 = C.DANGER
+            iconBg.BackgroundColor3 = C.DANGER; iconBg.BackgroundTransparency = 0.82; iconLetter.TextColor3 = C.DANGER
+            statusLbl.Text = "OFF · 3x TAP TO EDIT"; statusLbl.TextColor3 = C.DANGER; nameLbl.Text = cfg.titleOff or cfg.titleOn
+        end
+    end
+    refreshVisual()
+    applyScale(currentScale)
+    local taps = 0; local tapTimer = nil
+    btn.MouseButton1Click:Connect(CTN_NO_VIRTUALIZE(function()
+        if d.moved then d.moved = false; return end
+        taps = taps + 1; if tapTimer then pcall(task.cancel, tapTimer) end
+        if taps == 1 then active = not active; refreshVisual(); if cfg.onToggle then cfg.onToggle(active) end
+        elseif taps >= 3 then active = not active; refreshVisual(); if cfg.onToggle then cfg.onToggle(active) end; if cfg.openSettings then cfg.openSettings() end; taps = 0; return end
+        tapTimer = task.delay(0.4, function() taps = 0 end)
+    end))
+    return {
+        button = btn, setVisible = function(v) btn.Visible = v end,
+        isVisible = function() return btn.Visible end,
+        setActive = function(v) active = v; refreshVisual() end,
+        isActive = function() return active end,
+        setScale = applyScale,
+        setPosition = function(x, y) btn.Position = UDim2.new(0, x, 0, y) end,
+        getPosition = function() return btn.Position.X.Offset, btn.Position.Y.Offset end,
+        toggle = function() active = not active; refreshVisual(); if cfg.onToggle then cfg.onToggle(active) end end,
+    }
+end
+
+widgetRefs.sneaky = makeWidget({icon="S", color=C.W_SNEAKY, y=24, titleOn="Auto Sneaky · ON", titleOff="Auto Sneaky", defaultActive=false, onToggle=function(on) S.SNEAKY_ACTIVE = on end, openSettings=function() popupRefs.sneaky.toggle() end})
+widgetRefs.juggle = makeWidget({icon="J", color=C.W_JUGGLE, y=80, titleOn="Auto Juggle · ON", titleOff="Auto Juggle", defaultActive=false, onToggle=function(on) getgenv().AutoJuggleV1.enabled = on end, openSettings=function() popupRefs.juggle.toggle() end})
+widgetRefs.aim = makeWidget({icon="A", color=C.W_AIM, y=136, titleOn="Aimbot · ON", titleOff="Aimbot", defaultActive=false, onToggle=function(on) aimbotConfig.enabled = on end, openSettings=function() popupRefs.aim.toggle() end})
+widgetRefs.aimpass = makeWidget({icon="P", color=C.W_PASST, y=192, titleOn="Aim Pass · ON", titleOff="Aim Pass", defaultActive=false, onToggle=function(on) AP.enabled = on end, openSettings=function() popupRefs.aimpass.toggle() end})
+widgetRefs.toggle = makeWidget({icon="T", color=C.W_TOGGLE, y=248, titleOn="Toggle Reach · ON", titleOff="Toggle Reach", defaultActive=false, onToggle=function(on) S.toggleHBEEnabled = on end, openSettings=function() popupRefs.toggle.toggle() end})
+widgetRefs.gk = makeWidget({icon="G", color=C.W_GK, y=304, titleOn="Auto GK · ON", titleOff="Auto GK", defaultActive=false, onToggle=function(on) S.GK_AUTO_ON = on end, openSettings=function() popupRefs.gk.toggle() end})
+
+local refreshAllWidgetScales = function(s)
+    WIDGET_SCALE = s
+    for _, w in pairs(widgetRefs) do if w and w.setScale then pcall(w.setScale, s) end end
+end
+
+task.spawn(CTN_NO_VIRTUALIZE(function()
+    while true do
+        task.wait(0.25)
+        for _, fn in ipairs(toggleRefreshers) do pcall(fn) end
+        if widgetRefs.aim and widgetRefs.aim.isActive() ~= aimbotConfig.enabled then widgetRefs.aim.setActive(aimbotConfig.enabled) end
+        if widgetRefs.aimpass and widgetRefs.aimpass.isActive() ~= AP.enabled then widgetRefs.aimpass.setActive(AP.enabled) end
+        if widgetRefs.juggle and widgetRefs.juggle.isActive() ~= getgenv().AutoJuggleV1.enabled then widgetRefs.juggle.setActive(getgenv().AutoJuggleV1.enabled) end
+        if widgetRefs.toggle and widgetRefs.toggle.isActive() ~= S.toggleHBEEnabled then widgetRefs.toggle.setActive(S.toggleHBEEnabled) end
+        if widgetRefs.sneaky and widgetRefs.sneaky.isActive() ~= S.SNEAKY_ACTIVE then widgetRefs.sneaky.setActive(S.SNEAKY_ACTIVE) end
+        if widgetRefs.gk and widgetRefs.gk.isActive() ~= S.GK_AUTO_ON then widgetRefs.gk.setActive(S.GK_AUTO_ON) end
+    end
+end))
+
+warn("[VantixHub] core loaded")
+
+local uiOk, uiErr = pcall(function()
+    local ok, result = pcall(function() return loadstring(game:HttpGet("https://sirius.menu/gen2"))() end)
+    if not (ok and result) then warn("[VantixHub] Rayfield load failed: " .. tostring(result)); return end
+    local MenuLibrary = result
+    warn("[VantixHub] Rayfield loaded")
+
+    local Icons = {Aimbot="rbxassetid://7733674079",Reach="rbxassetid://7733964719",Skills="rbxassetid://7734053426",Scripts="rbxassetid://7733911828",Visuals="rbxassetid://7733765045",Screen="rbxassetid://7733964719",Settings="rbxassetid://7734068321",Config="rbxassetid://7734068321",Keybinds="rbxassetid://7734042071"}
+    local GOLD=Color3.fromRGB(255,199,64); local GOLD_SOFT=Color3.fromRGB(255,217,122); local BLUE=Color3.fromRGB(30,110,255)
+    local NAVY=Color3.fromRGB(9,13,22); local NAVY2=Color3.fromRGB(13,19,33); local NAVY3=Color3.fromRGB(18,27,46); local NAVY4=Color3.fromRGB(24,38,64)
+    local WARM=Color3.fromRGB(247,241,220); local BORDER=Color3.fromRGB(198,160,60)
+    local Window = MenuLibrary:CreateWindow({
+        Name = "VantixHub", ShowName = "VantixHub", ShowIcon = "rbxassetid://80387863064905",
+        Configuration = {DisableRayfieldPrompts = true, autoSave = false, autoLoad = false, fileName = "VantixConfig", customFolder = "VantixHub"},
+        theme = {
+            WindowColor = ColorSequence.new(NAVY, NAVY2), ShadowColor = Color3.fromRGB(4,6,12),
+            ElementStroke = BORDER, ElementGradient = ColorSequence.new(NAVY3, NAVY4),
+            ElementStrokeGradient = ColorSequence.new(BORDER, BLUE), ElementStrokeHover = GOLD,
+            TabBackground = ColorSequence.new(BLUE, NAVY3), TabStroke = ColorSequence.new(BORDER, BLUE),
+            SliderBackground = NAVY3, SliderBackgroundHover = NAVY4, SliderProgress = ColorSequence.new(GOLD, BLUE),
+            AccentColor = GOLD, AccentStroke = GOLD_SOFT, ToggleKnobOff = Color3.fromRGB(200,208,224),
+            StatBackground = NAVY2, DropdownHighlight = GOLD,
+            NeutralButton = NAVY3, NeutralButtonHover = NAVY4, NeutralButtonStroke = BORDER,
+            ContentColor = WARM, TextColor = WARM, PlaceholderColor = Color3.fromRGB(140,150,170),
+        },
+    })
+    warn("[VantixHub] Window created")
+
+    local UI_REG = {}
+    local regUI = function(id, el, kind)
+        if el then UI_REG[id] = {el = el, kind = kind or "toggle"} end
+        return el
+    end
+    local refreshUI = function(id, value)
+        local r = UI_REG[id]
+        if not r then return end
+        pcall(function()
+            if r.kind == "dropdown" then
+                r.el:Set({value})
+            else
+                r.el:Set(value)
+            end
+        end)
+    end
+
+    local TabFeatures = Window:CreateTab({Name="Features", Icon=Icons.Aimbot})
+    TabFeatures:CreateSection({Name="Aimbot"})
+    regUI("aimbot.enabled", TabFeatures:CreateToggle({Name="Enable Aimbot", Value=aimbotConfig.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) aimbotConfig.enabled = v end)}), "toggle")
+    regUI("aimbot.targeting_mode", TabFeatures:CreateDropdown({Name="Targeting Mode", Options=AB_MODE_LIST, Value=S.AB_TARGET_MODE, Callback=CTN_NO_VIRTUALIZE(function(opt) S.AB_TARGET_MODE = opt; pcall(function() popupRefs.aim.refreshMode() end) end)}), "dropdown")
+    regUI("aimbot.curve", TabFeatures:CreateToggle({Name="Curve Aimbot", Value=aimbotConfig.curveEnabled, Callback=CTN_NO_VIRTUALIZE(function(v) aimbotConfig.curveEnabled = v end)}), "toggle")
+    regUI("aimbot.topcorner", TabFeatures:CreateToggle({Name="Top Corner Mode", Value=aimbotConfig.topCornerMode, Callback=CTN_NO_VIRTUALIZE(function(v) aimbotConfig.topCornerMode = v end)}), "toggle")
+    regUI("aimbot.maxpower", TabFeatures:CreateSlider({Name="Max Kick Power", Range={20,150}, Value=aimbotConfig.maxPower, Increment=1, Callback=CTN_NO_VIRTUALIZE(function(v) aimbotConfig.maxPower = v end)}), "slider")
+
+    TabFeatures:CreateSection({Name="Aim Pass"})
+    regUI("aimpass.enabled", TabFeatures:CreateToggle({Name="Enable Aim Pass", Value=AP.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) AP.enabled = v end)}), "toggle")
+    regUI("aimpass.teammates_only", TabFeatures:CreateToggle({Name="Teammates Only", Value=AP.teammatesOnly, Callback=CTN_NO_VIRTUALIZE(function(v)
+        AP.teammatesOnly = v
+        if v and AP.targetName then
+            local p = Players:FindFirstChild(AP.targetName)
+            if p and not isPlayerEligibleForPass(p) then AP.targetName = nil end
+        end
+        if popupRefs.aimpass and popupRefs.aimpass.refresh then pcall(popupRefs.aimpass.refresh) end
+    end)}), "toggle")
+    regUI("aimpass.mode", TabFeatures:CreateDropdown({Name="Pass Mode", Options={"PLAYER","POSITION","FURTHEST","CLOSEST"}, Value=AP.mode, Callback=CTN_NO_VIRTUALIZE(function(opt)
+        AP.mode = opt
+        if popupRefs.aimpass and popupRefs.aimpass.refresh then pcall(popupRefs.aimpass.refresh) end
+    end)}), "dropdown")
+    regUI("aimpass.position", TabFeatures:CreateDropdown({Name="Pass Position", Options={"ST","LW","RW","CDM","RANDOM"}, Value=AP.position, Callback=CTN_NO_VIRTUALIZE(function(opt)
+        AP.position = opt
+        if popupRefs.aimpass and popupRefs.aimpass.refresh then pcall(popupRefs.aimpass.refresh) end
+    end)}), "dropdown")
+    local function targetPlayerOptions()
+        local names = {"NONE"}
+        for _, p in ipairs(getEligiblePlayersForPass()) do table.insert(names, p.Name) end
+        return names
+    end
+    local targetPlayerDropdown = TabFeatures:CreateDropdown({Name="Target Player (PLAYER mode)", Options=targetPlayerOptions(), Value=AP.targetName or "NONE", Callback=CTN_NO_VIRTUALIZE(function(opt)
+        if opt == "NONE" then AP.targetName = nil else AP.targetName = opt end
+        if popupRefs.aimpass and popupRefs.aimpass.refresh then pcall(popupRefs.aimpass.refresh) end
+    end)})
+    regUI("aimpass.target_player", targetPlayerDropdown, "dropdown")
+    regUI("aimpass.outline", TabFeatures:CreateToggle({Name="Player ESP", Value=AP.outlineTarget, Callback=CTN_NO_VIRTUALIZE(function(v) AP.outlineTarget = v end)}), "toggle")
+    regUI("aimpass.spin", TabFeatures:CreateToggle({Name="Random Spin", Value=AP.spinEnabled, Callback=CTN_NO_VIRTUALIZE(function(v) AP.spinEnabled = v end)}), "toggle")
+    TabFeatures:CreateInput({Name="Blacklist Player (name)", Callback=CTN_NO_VIRTUALIZE(function(txt)
+        if txt and txt ~= "" then
+            AP.blacklist[txt] = true
+            if popupRefs.aimpass and popupRefs.aimpass.refreshBlacklist then pcall(popupRefs.aimpass.refreshBlacklist) end
+        end
+    end)})
+    TabFeatures:CreateButton({Name="Clear Blacklist", Callback=CTN_NO_VIRTUALIZE(function()
+        AP.blacklist = {}
+        if popupRefs.aimpass and popupRefs.aimpass.refreshBlacklist then pcall(popupRefs.aimpass.refreshBlacklist) end
+    end)})
+    task.spawn(function()
+        while task.wait(3) do
+            if targetPlayerDropdown then
+                pcall(function() targetPlayerDropdown:Refresh(targetPlayerOptions()) end)
+            end
+        end
+    end)
+
+    TabFeatures:CreateSection({Name="Auto Sneaky"})
+    regUI("sneaky.enabled", TabFeatures:CreateToggle({Name="Enable Sneaky", Value=S.SNEAKY_ACTIVE, Callback=CTN_NO_VIRTUALIZE(function(v) S.SNEAKY_ACTIVE = v end)}), "toggle")
+    regUI("sneaky.reach", TabFeatures:CreateSlider({Name="Sneaky Reach", Range={4.1,7.0}, Value=S.SNEAKY_REACH, Increment=0.1, Callback=CTN_NO_VIRTUALIZE(function(v) S.SNEAKY_REACH = v end)}), "slider")
+
+    TabFeatures:CreateSection({Name="Auto Juggle"})
+    regUI("juggle.enabled", TabFeatures:CreateToggle({Name="Enable Juggle", Value=getgenv().AutoJuggleV1.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) getgenv().AutoJuggleV1.enabled = v end)}), "toggle")
+    regUI("juggle.reach", TabFeatures:CreateSlider({Name="Juggle Reach", Range={4.1,7.5}, Value=getgenv().AutoJuggleV1.reach, Increment=0.1, Callback=CTN_NO_VIRTUALIZE(function(v) getgenv().AutoJuggleV1.reach = v end)}), "slider")
+
+    TabFeatures:CreateSection({Name="Auto GK"})
+    regUI("gk.enabled", TabFeatures:CreateToggle({Name="Enable Auto GK", Value=S.GK_AUTO_ON, Callback=CTN_NO_VIRTUALIZE(function(v) S.GK_AUTO_ON = v end)}), "toggle")
+    regUI("gk.groundsave", TabFeatures:CreateToggle({Name="Auto Ground Save", Value=S.GK_GROUNDSAVE_ON, Callback=CTN_NO_VIRTUALIZE(function(v) S.GK_GROUNDSAVE_ON = v end)}), "toggle")
+    regUI("gk.reach", TabFeatures:CreateSlider({Name="GK Reach", Range={4.1,7}, Value=S.GK_REACH, Increment=0.1, Callback=CTN_NO_VIRTUALIZE(function(v) S.GK_REACH = v end)}), "slider")
+
+    local TabWidgets = Window:CreateTab({Name="Widgets", Icon=Icons.Screen})
+    TabWidgets:CreateSection({Name="Widget Size"})
+    regUI("widget.scale", TabWidgets:CreateSlider({Name="Widget Scale", Range={0.5, 2.0}, Value=WIDGET_SCALE, Increment=0.05, Callback=CTN_NO_VIRTUALIZE(function(v) refreshAllWidgetScales(v) end)}), "slider")
+    TabWidgets:CreateSection({Name="Floating Widgets"})
+    regUI("widget.sneaky.visible", TabWidgets:CreateToggle({Name="Show Auto Sneaky Widget", Value=false, Callback=CTN_NO_VIRTUALIZE(function(v) widgetRefs.sneaky.setVisible(v) end)}), "toggle")
+    regUI("widget.juggle.visible", TabWidgets:CreateToggle({Name="Show Auto Juggle Widget", Value=false, Callback=CTN_NO_VIRTUALIZE(function(v) widgetRefs.juggle.setVisible(v) end)}), "toggle")
+    regUI("widget.aim.visible", TabWidgets:CreateToggle({Name="Show Aimbot Widget", Value=false, Callback=CTN_NO_VIRTUALIZE(function(v) widgetRefs.aim.setVisible(v) end)}), "toggle")
+    regUI("widget.aimpass.visible", TabWidgets:CreateToggle({Name="Show Aim Pass Widget", Value=false, Callback=CTN_NO_VIRTUALIZE(function(v) widgetRefs.aimpass.setVisible(v) end)}), "toggle")
+    regUI("widget.toggle.visible", TabWidgets:CreateToggle({Name="Show Toggle Reach Widget", Value=false, Callback=CTN_NO_VIRTUALIZE(function(v) widgetRefs.toggle.setVisible(v) end)}), "toggle")
+    regUI("widget.gk.visible", TabWidgets:CreateToggle({Name="Show Auto GK Widget", Value=false, Callback=CTN_NO_VIRTUALIZE(function(v) widgetRefs.gk.setVisible(v) end)}), "toggle")
+
+    local TabReach = Window:CreateTab({Name="Reach", Icon=Icons.Reach})
+    TabReach:CreateSection({Name="Base Reach"})
+    regUI("reach.base_enabled", TabReach:CreateToggle({Name="Base Reach", Value=S.baseEnabled, Callback=CTN_NO_VIRTUALIZE(function(v) S.baseEnabled = v end)}), "toggle")
+    regUI("reach.base_distance", TabReach:CreateSlider({Name="Base Reach Distance", Range={4.1,7.0}, Value=S.BASE_REACH, Increment=0.1, Callback=CTN_NO_VIRTUALIZE(function(v) S.BASE_REACH = v end)}), "slider")
+    TabReach:CreateSection({Name="Unnatural Reach"})
+    regUI("reach.unnatural_enabled", TabReach:CreateToggle({Name="Unnatural Reach", Value=RC.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) RC.enabled = v end)}), "toggle")
+    regUI("reach.unnatural_distance", TabReach:CreateSlider({Name="Unnatural Reach Distance", Range={4.1,7.0}, Value=RC.range, Increment=0.1, Callback=CTN_NO_VIRTUALIZE(function(v) RC.range = v end)}), "slider")
+    regUI("reach.priority", TabReach:CreateToggle({Name="Reach Priority", Value=RC.priorityEnabled, Callback=CTN_NO_VIRTUALIZE(function(v) RC.priorityEnabled = v end)}), "toggle")
+    regUI("reach.ball_smoother", TabReach:CreateToggle({
+        Name = "BALL SMOOTHER",
+        Value = BallTimeCfg.enabled,
+        Callback = CTN_NO_VIRTUALIZE(function(v) BallTimeCfg.enabled = v end),
+    }), "toggle")
+
+    local TabVisual = Window:CreateTab({Name="Visuals", Icon=Icons.Visuals})
+    TabVisual:CreateSection({Name="Ball Cosmetics"})
+    regUI("visual.esp", TabVisual:CreateToggle({Name="Ball ESP", Value=ESP_CONFIG.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) ESP_CONFIG.enabled = v end)}), "toggle")
+    regUI("visual.esp.transparency", TabVisual:CreateSlider({Name="ESP Transparency", Range={0, 0.9}, Value=ESP_CONFIG.transparency, Increment=0.05, Callback=CTN_NO_VIRTUALIZE(function(v) ESP_CONFIG.transparency = v end)}), "slider")
+    regUI("visual.trail", TabVisual:CreateToggle({Name="Ball Trail", Value=TRAIL_CONFIG.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) TRAIL_CONFIG.enabled = v end)}), "toggle")
+    regUI("visual.trail.lifetime", TabVisual:CreateSlider({Name="Trail Lifetime", Range={0.3, 5.0}, Value=TRAIL_CONFIG.lifetime, Increment=0.1, Callback=CTN_NO_VIRTUALIZE(function(v) TRAIL_CONFIG.lifetime = v end)}), "slider")
+    TabVisual:CreateSection({Name="Field Color"})
+    local fieldColorRef
+    fieldColorRef = TabVisual:CreateDropdown({Name="Field Color", Options=FIELD_COLOR_OPTIONS, Value="Orginal", Callback=CTN_NO_VIRTUALIZE(function(opt)
+        cacheFieldParts()
+        if opt == "Orginal" then
+            for _, part in ipairs(cachedFieldParts) do
+                if part and part.Parent and orginalFieldColors[part] then
+                    pcall(function() part.Color = orginalFieldColors[part] end)
+                end
+            end
+        else
+            local col = FIELD_COLOR_MAP[opt] or FIELD_COLOR_MAP.Default
+            for _, part in ipairs(cachedFieldParts) do
+                if part and part.Parent then pcall(function() part.Color = col end) end
+            end
+        end
+    end)})
+    regUI("visual.field_color", fieldColorRef, "dropdown")
+    TabVisual:CreateSection({Name="Time of Day"})
+    regUI("visual.clock_time", TabVisual:CreateSlider({Name="Clock Time", Range={0, 24}, Value=Lighting.ClockTime, Increment=0.5, Callback=CTN_NO_VIRTUALIZE(function(v) Lighting.ClockTime = v end)}), "slider")
+    TabVisual:CreateSection({Name="Ball Trajectory"})
+    regUI("visual.trajectory", TabVisual:CreateToggle({Name="Show Ball Trajectory", Value=BPcfg.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) BPcfg.enabled = v; if not v then bpClear() end end)}), "toggle")
+    TabVisual:CreateSection({Name="Rank Bypasser"})
+    regUI("visual.rank_bypass", TabVisual:CreateToggle({Name="Enable Rank Bypass", Value=V.rankBypassEnabled, Callback=CTN_NO_VIRTUALIZE(function(v) V.rankBypassEnabled = v; rankBypassCfg.enabled = v end)}), "toggle")
+    TabVisual:CreateSection({Name="Glove / Shoe Changer"})
+    regUI("visual.glove.enabled", TabVisual:CreateToggle({Name="Enable Glove Changer", Value=GLOVE.enabled, Callback=CTN_NO_VIRTUALIZE(function(v) GLOVE.enabled = v end)}), "toggle")
+    regUI("visual.glove.material", TabVisual:CreateDropdown({Name="Material", Options={"Neon","Plastic"}, Value=GLOVE.material, Callback=CTN_NO_VIRTUALIZE(function(opt) GLOVE.material = opt end)}), "dropdown")
+    regUI("visual.glove.left", TabVisual:CreateDropdown({Name="Left Glove", Options=COLOR_NAMES, Value=GLOVE.colors.LeftGlove, Callback=CTN_NO_VIRTUALIZE(function(opt) GLOVE.colors.LeftGlove = opt end)}), "dropdown")
+    regUI("visual.glove.right", TabVisual:CreateDropdown({Name="Right Glove", Options=COLOR_NAMES, Value=GLOVE.colors.RightGlove, Callback=CTN_NO_VIRTUALIZE(function(opt) GLOVE.colors.RightGlove = opt end)}), "dropdown")
+    regUI("visual.shoe.left", TabVisual:CreateDropdown({Name="Left Shoe", Options=COLOR_NAMES, Value=GLOVE.colors.LeftShoe, Callback=CTN_NO_VIRTUALIZE(function(opt) GLOVE.colors.LeftShoe = opt end)}), "dropdown")
+    regUI("visual.shoe.right", TabVisual:CreateDropdown({Name="Right Shoe", Options=COLOR_NAMES, Value=GLOVE.colors.RightShoe, Callback=CTN_NO_VIRTUALIZE(function(opt) GLOVE.colors.RightShoe = opt end)}), "dropdown")
+    TabVisual:CreateSection({Name="Hair Changer"})
+    TabVisual:CreateDropdown({Name="Hair Style", Options={"Default Hair","Bacon","Black","Black Mask","Blonde","Bold","Brown","Cap","Charmer","Cool","Dio","Egg","Floof","Fluffed","Green","Halloween","Hat","Hockey Mask","Knot","Long Pink","Messy","Nerd"}, Value="Default Hair", Callback=CTN_NO_VIRTUALIZE(function(opt) local id = HAIR_FRIENDLY_TO_ID[opt]; if id == "DEFAULT" then removeHair() elseif id then equipHair(id) end end)})
+    TabVisual:CreateSection({Name="Shirt Changer"})
+    TabVisual:CreateInput({Name="Shirt Number", Callback=CTN_NO_VIRTUALIZE(function(txt) applyShirtNumber(txt) end)})
+    TabVisual:CreateInput({Name="Shirt Name", Callback=CTN_NO_VIRTUALIZE(function(txt) applyShirtName(txt) end)})
+
+    -- ═══ FUN TAB ═══
+    local TabFun = Window:CreateTab({Name="Fun", Icon=Icons.Skills})
+    TabFun:CreateSection({Name="Auto Goal"})
+    local agToggle
+    agToggle = TabFun:CreateToggle({
+        Name = "Enable Auto Goal",
+        Value = AUTO_GOAL.enabled,
+        Callback = CTN_NO_VIRTUALIZE(function(v) AUTO_GOAL.enabled = v; AUTO_GOAL.lastFire = 0 end),
+    })
+    regUI("fun.autogoal.enabled", agToggle, "toggle")
+    AUTO_GOAL._refreshToggle = function(v) pcall(function() agToggle:Set(v) end) end
+    regUI("fun.autogoal.mode", TabFun:CreateDropdown({
+        Name = "Mode",
+        Options = {"LOOP", "SINGLE"},
+        Value = AUTO_GOAL.mode,
+        Callback = CTN_NO_VIRTUALIZE(function(opt) AUTO_GOAL.mode = opt end),
+    }), "dropdown")
+
+    TabFun:CreateSection({Name="Goal Trainer"})
+    TabFun:CreateButton({
+        Name = "📍 Create Goal Here",
+        Callback = CTN_NO_VIRTUALIZE(function()
+            if createTrainerGoal() then
+                Window:Notify({Title="Goal Trainer", Content="Goal created at your feet", Duration=3})
+            else
+                Window:Notify({Title="Goal Trainer", Content="No character / HRP", Duration=3})
+            end
+        end),
+    })
+    TabFun:CreateButton({
+        Name = "▶️ Start / Stop Trainer Loop",
+        Callback = CTN_NO_VIRTUALIZE(function()
+            if GoalTrainer.running then
+                stopGoalTrainer()
+                Window:Notify({Title="Goal Trainer", Content="Stopped", Duration=2})
+            else
+                local ok2, err = startGoalTrainer()
+                if ok2 then
+                    Window:Notify({Title="Goal Trainer", Content="Started", Duration=2})
+                else
+                    Window:Notify({Title="Goal Trainer", Content=tostring(err), Duration=3})
+                end
+            end
+        end),
+    })
+
+    TabFun:CreateSection({Name="Ball Control"})
+    TabFun:CreateToggle({
+        Name = "❄️ Freeze Ball",
+        Value = false,
+        Callback = CTN_NO_VIRTUALIZE(function(v)
+            toggleFreezeBall(v)
+            Window:Notify({Title="Ball Freeze", Content = v and "ON" or "OFF", Duration=2})
+        end),
+    })
+    TabFun:CreateToggle({
+        Name = "🗑️ Delete Ball",
+        Value = false,
+        Callback = CTN_NO_VIRTUALIZE(function(v)
+            toggleDeleteBall(v)
+            Window:Notify({Title="Delete Ball", Content = v and "DELETING..." or "STOPPED", Duration=2})
+        end),
+    })
+
+    local TabKeybinds = Window:CreateTab({Name="Keybinds", Icon=Icons.Keybinds})
+    TabKeybinds:CreateSection({Name="Feature Keybinds"})
+    TabKeybinds:CreateKeybind({Name="Toggle Aimbot", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        if widgetRefs.aim then widgetRefs.aim.toggle() else aimbotConfig.enabled = not aimbotConfig.enabled end
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Aim Pass", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        if widgetRefs.aimpass then widgetRefs.aimpass.toggle() else AP.enabled = not AP.enabled end
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Auto Sneaky", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        if widgetRefs.sneaky then widgetRefs.sneaky.toggle() else S.SNEAKY_ACTIVE = not S.SNEAKY_ACTIVE end
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Auto Juggle", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        if widgetRefs.juggle then widgetRefs.juggle.toggle() else getgenv().AutoJuggleV1.enabled = not getgenv().AutoJuggleV1.enabled end
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Auto GK", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        if widgetRefs.gk then widgetRefs.gk.toggle() else S.GK_AUTO_ON = not S.GK_AUTO_ON end
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Reach", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        if widgetRefs.toggle then widgetRefs.toggle.toggle() else S.toggleHBEEnabled = not S.toggleHBEEnabled end
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Base Reach", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        S.baseEnabled = not S.baseEnabled
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Unnatural Reach", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        RC.enabled = not RC.enabled
+    end)})
+    TabKeybinds:CreateKeybind({Name="Toggle Auto Goal", Value="", Callback=CTN_NO_VIRTUALIZE(function()
+        AUTO_GOAL.enabled = not AUTO_GOAL.enabled; AUTO_GOAL.lastFire = 0
+        if AUTO_GOAL._refreshToggle then pcall(AUTO_GOAL._refreshToggle, AUTO_GOAL.enabled) end
+    end)})
+
+    local CONFIG_FOLDER = "VantixHub_Configs"
+    if isfolder and not isfolder(CONFIG_FOLDER) then pcall(makefolder, CONFIG_FOLDER) end
+    local AUTOLOAD_FILE = CONFIG_FOLDER .. "/_autoload.json"
+
+    local function copyTable(t)
+        local out = {}
+        for k, v in pairs(t) do
+            if type(v) == "table" then out[k] = copyTable(v)
+            else out[k] = v end
+        end
+        return out
+    end
+
+    local function listSavedConfigs()
+        local names = {}
+        if isfolder and isfolder(CONFIG_FOLDER) then
+            local ok, files = pcall(listfiles, CONFIG_FOLDER)
+            if ok and files then
+                for _, f in ipairs(files) do
+                    local n = tostring(f):match("([^/\\]+)%.json$")
+                    if n and n ~= "_autoload" then table.insert(names, n) end
+                end
+                table.sort(names)
+            end
+        end
+        return names
+    end
+
+    local saveCurrentConfig = function(name)
+        if not writefile then return false, "no filesystem" end
+        local widgetData = {}
+        for id, w in pairs(widgetRefs) do
+            if w and w.button then
+                widgetData[id] = {
+                    visible = w.button.Visible,
+                    x = w.button.Position.X.Offset,
+                    y = w.button.Position.Y.Offset,
+                    active = w.isActive and w.isActive() or false,
+                }
+            end
+        end
+        local keybindData = {}
+        for id, b in pairs(KEYBINDS) do
+            if b and b.keyCode then keybindData[id] = b.keyCode.Name end
+        end
+        local data = {
+            S = copyTable(S),
+            AP = copyTable(AP),
+            V = copyTable(V),
+            GLOVE = copyTable(GLOVE),
+            RC = copyTable(RC),
+            BallTimeConfig = copyTable(BallTimeCfg),
+            AUTO_GOAL = {enabled = AUTO_GOAL.enabled, mode = AUTO_GOAL.mode},
+            aimbotConfig = copyTable(aimbotConfig),
+            AutoJuggleV1 = copyTable(getgenv().AutoJuggleV1),
+            BallPredictor = {enabled = BPcfg.enabled},
+            ReachSystem = {REACH = ReachSystem.REACH, BALL_SPEED = ReachSystem.BALL_SPEED},
+            ESP_CONFIG = copyTable(ESP_CONFIG),
+            TRAIL_CONFIG = copyTable(TRAIL_CONFIG),
+            WIDGET_SCALE = WIDGET_SCALE,
+            WidgetData = widgetData,
+            Keybinds = keybindData,
+            AB_PRECISE_DOTS = AB_PRECISE_DOTS,
+        }
+        local ok, err = pcall(function()
+            writefile(CONFIG_FOLDER .. "/" .. name .. ".json", HttpService:JSONEncode(data))
+        end)
+        return ok, err
+    end
+
+    local loadConfigFile = function(name)
+        if not isfile then return false end
+        local path = CONFIG_FOLDER .. "/" .. name .. ".json"
+        if not isfile(path) then return false end
+        local ok, raw = pcall(readfile, path); if not ok or not raw then return false end
+        local data; pcall(function() data = HttpService:JSONDecode(raw) end)
+        if not data then return false end
+        if data.S then for k, v in pairs(data.S) do if S[k] ~= nil then S[k] = v end end end
+        if data.AP then for k, v in pairs(data.AP) do if AP[k] ~= nil then AP[k] = v end end end
+        if data.V then for k, v in pairs(data.V) do if V[k] ~= nil then V[k] = v end end end
+        if data.GLOVE then
+            for k, v in pairs(data.GLOVE) do
+                if k == "colors" and type(v) == "table" then
+                    for kk, vv in pairs(v) do if GLOVE.colors[kk] then GLOVE.colors[kk] = vv end end
+                elseif GLOVE[k] ~= nil then GLOVE[k] = v end
+            end
+        end
+        if data.RC then for k, v in pairs(data.RC) do if RC[k] ~= nil then RC[k] = v end end end
+        if data.BallTimeConfig then for k, v in pairs(data.BallTimeConfig) do if BallTimeCfg[k] ~= nil then BallTimeCfg[k] = v end end end
+        if data.AUTO_GOAL then
+            for k, v in pairs(data.AUTO_GOAL) do if AUTO_GOAL[k] ~= nil then AUTO_GOAL[k] = v end end
+            AUTO_GOAL.lastFire = 0
+        end
+        if data.aimbotConfig then for k, v in pairs(data.aimbotConfig) do if aimbotConfig[k] ~= nil then aimbotConfig[k] = v end end end
+        if data.AutoJuggleV1 then for k, v in pairs(data.AutoJuggleV1) do if getgenv().AutoJuggleV1[k] ~= nil then getgenv().AutoJuggleV1[k] = v end end end
+        if data.ReachSystem then
+            if data.ReachSystem.REACH then ReachSystem.REACH = data.ReachSystem.REACH end
+            if data.ReachSystem.BALL_SPEED then ReachSystem.BALL_SPEED = data.ReachSystem.BALL_SPEED end
+        end
+        if data.BallPredictor and type(data.BallPredictor) == "table" then
+            BPcfg.enabled = data.BallPredictor.enabled == true
+        end
+        if data.ESP_CONFIG then for k, v in pairs(data.ESP_CONFIG) do if ESP_CONFIG[k] ~= nil then ESP_CONFIG[k] = v end end end
+        if data.TRAIL_CONFIG then for k, v in pairs(data.TRAIL_CONFIG) do if TRAIL_CONFIG[k] ~= nil then TRAIL_CONFIG[k] = v end end end
+        if type(data.WIDGET_SCALE) == "number" then refreshAllWidgetScales(data.WIDGET_SCALE) end
+        rankBypassCfg.enabled = V.rankBypassEnabled
+        if data.AB_PRECISE_DOTS and type(data.AB_PRECISE_DOTS) == "table" then
+            for i = #AB_PRECISE_DOTS, 1, -1 do table.remove(AB_PRECISE_DOTS, i) end
+            for _, d in ipairs(data.AB_PRECISE_DOTS) do
+                if type(d) == "table" and type(d.x) == "number" and type(d.y) == "number" then
+                    table.insert(AB_PRECISE_DOTS, {x = d.x, y = d.y})
+                end
+            end
+            if popupRefs.aim and popupRefs.aim.renderDots then pcall(popupRefs.aim.renderDots) end
+        end
+        if data.WidgetData then
+            for id, wd in pairs(data.WidgetData) do
+                local w = widgetRefs[id]
+                if w and w.button then
+                    pcall(function()
+                        if type(wd.x) == "number" and type(wd.y) == "number" then
+                            w.button.Position = UDim2.new(0, wd.x, 0, wd.y)
+                        end
+                        if wd.visible ~= nil then w.setVisible(wd.visible == true) end
+                        if wd.active ~= nil then w.setActive(wd.active == true) end
+                    end)
+                end
+            end
+        end
+        if data.Keybinds then
+            for id, kname in pairs(data.Keybinds) do
+                local kc = Enum.KeyCode[kname]
+                if kc then KEYBINDS[id] = {inputType = Enum.UserInputType.Keyboard, keyCode = kc} end
+            end
+        end
+        refreshUI("aimbot.enabled", aimbotConfig.enabled)
+        refreshUI("aimbot.targeting_mode", S.AB_TARGET_MODE)
+        refreshUI("aimbot.curve", aimbotConfig.curveEnabled)
+        refreshUI("aimbot.topcorner", aimbotConfig.topCornerMode)
+        refreshUI("aimbot.maxpower", aimbotConfig.maxPower)
+        refreshUI("aimpass.enabled", AP.enabled)
+        refreshUI("aimpass.teammates_only", AP.teammatesOnly)
+        refreshUI("aimpass.mode", AP.mode)
+        refreshUI("aimpass.position", AP.position)
+        refreshUI("aimpass.target_player", AP.targetName or "NONE")
+        refreshUI("aimpass.outline", AP.outlineTarget)
+        refreshUI("aimpass.spin", AP.spinEnabled)
+        refreshUI("sneaky.enabled", S.SNEAKY_ACTIVE)
+        refreshUI("sneaky.reach", S.SNEAKY_REACH)
+        refreshUI("juggle.enabled", getgenv().AutoJuggleV1.enabled)
+        refreshUI("juggle.reach", getgenv().AutoJuggleV1.reach)
+        refreshUI("gk.enabled", S.GK_AUTO_ON)
+        refreshUI("gk.groundsave", S.GK_GROUNDSAVE_ON)
+        refreshUI("gk.reach", S.GK_REACH)
+        refreshUI("widget.scale", WIDGET_SCALE)
+        refreshUI("widget.sneaky.visible", widgetRefs.sneaky and widgetRefs.sneaky.isVisible() or false)
+        refreshUI("widget.juggle.visible", widgetRefs.juggle and widgetRefs.juggle.isVisible() or false)
+        refreshUI("widget.aim.visible", widgetRefs.aim and widgetRefs.aim.isVisible() or false)
+        refreshUI("widget.aimpass.visible", widgetRefs.aimpass and widgetRefs.aimpass.isVisible() or false)
+        refreshUI("widget.toggle.visible", widgetRefs.toggle and widgetRefs.toggle.isVisible() or false)
+        refreshUI("widget.gk.visible", widgetRefs.gk and widgetRefs.gk.isVisible() or false)
+        refreshUI("reach.base_enabled", S.baseEnabled)
+        refreshUI("reach.base_distance", S.BASE_REACH)
+        refreshUI("reach.unnatural_enabled", RC.enabled)
+        refreshUI("reach.unnatural_distance", RC.range)
+        refreshUI("reach.priority", RC.priorityEnabled)
+        refreshUI("reach.ball_smoother", BallTimeCfg.enabled)
+        refreshUI("visual.esp", ESP_CONFIG.enabled)
+        refreshUI("visual.esp.transparency", ESP_CONFIG.transparency)
+        refreshUI("visual.trail", TRAIL_CONFIG.enabled)
+        refreshUI("visual.trail.lifetime", TRAIL_CONFIG.lifetime)
+        refreshUI("visual.trajectory", BPcfg.enabled)
+        refreshUI("visual.rank_bypass", V.rankBypassEnabled)
+        refreshUI("visual.glove.enabled", GLOVE.enabled)
+        refreshUI("visual.glove.material", GLOVE.material)
+        refreshUI("visual.glove.left", GLOVE.colors.LeftGlove)
+        refreshUI("visual.glove.right", GLOVE.colors.RightGlove)
+        refreshUI("visual.shoe.left", GLOVE.colors.LeftShoe)
+        refreshUI("visual.shoe.right", GLOVE.colors.RightShoe)
+        refreshUI("fun.autogoal.enabled", AUTO_GOAL.enabled)
+        refreshUI("fun.autogoal.mode", AUTO_GOAL.mode)
+        if popupRefs.aim and popupRefs.aim.refreshMode then pcall(popupRefs.aim.refreshMode) end
+        if popupRefs.aimpass and popupRefs.aimpass.refresh then pcall(popupRefs.aimpass.refresh) end
+        return true
+    end
+
+    local deleteConfigFile = function(name)
+        if not delfile then return false end
+        local ok = pcall(delfile, CONFIG_FOLDER .. "/" .. name .. ".json")
+        return ok
+    end
+
+    local readAutoload = function()
+        local cfg = {enabled=false, name=""}
+        if isfile and isfile(AUTOLOAD_FILE) then
+            local ok, raw = pcall(readfile, AUTOLOAD_FILE)
+            if ok and raw then
+                pcall(function()
+                    local d = HttpService:JSONDecode(raw)
+                    if type(d) == "table" then
+                        cfg.enabled = d.enabled == true
+                        cfg.name = type(d.name) == "string" and d.name or ""
+                    end
+                end)
+            end
+        end
+        return cfg
+    end
+    local writeAutoload = function(enabled, name)
+        pcall(function()
+            if writefile then
+                writefile(AUTOLOAD_FILE, HttpService:JSONEncode({enabled=enabled, name=name}))
+            end
+        end)
+    end
+
+    local autoloadCfg = readAutoload()
+    local TabConfig = Window:CreateTab({Name="Config", Icon=Icons.Config})
+
+    TabConfig:CreateSection({Name="Save"})
+    local cfgNameInput = "default"
+    TabConfig:CreateInput({Name="Config Name", Placeholder="my_config", Callback=CTN_NO_VIRTUALIZE(function(txt) if txt and txt ~= "" then cfgNameInput = txt end end)})
+    local configListDropdown
+    local refreshConfigList = function()
+        local names = listSavedConfigs()
+        local opts = (#names > 0) and names or {"(no configs saved)"}
+        if configListDropdown then
+            pcall(function() configListDropdown:Refresh(opts) end)
+        end
+    end
+    TabConfig:CreateButton({Name="💾 Save Current Settings", Callback=CTN_NO_VIRTUALIZE(function()
+        if not cfgNameInput or cfgNameInput == "" then
+            Window:Notify({Title="Config", Content="Enter a name first", Duration=3})
+            return
+        end
+        local ok, err = saveCurrentConfig(cfgNameInput)
+        if ok then
+            Window:Notify({Title="Config", Content="Saved: "..cfgNameInput, Duration=3})
+            refreshConfigList()
+        else
+            Window:Notify({Title="Config", Content="Failed: "..tostring(err), Duration=3})
+        end
+    end)})
+
+    TabConfig:CreateSection({Name="Load"})
+    local selectedToLoad = nil
+    local initialNames = listSavedConfigs()
+    configListDropdown = TabConfig:CreateDropdown({
+        Name = "Saved Configs",
+        Options = (#initialNames > 0) and initialNames or {"(no configs saved)"},
+        Value = (#initialNames > 0) and initialNames[1] or "(no configs saved)",
+        Callback = CTN_NO_VIRTUALIZE(function(opt)
+            if opt ~= "(no configs saved)" then selectedToLoad = opt end
+        end),
+    })
+    if #initialNames > 0 then selectedToLoad = initialNames[1] end
+    TabConfig:CreateButton({Name="📂 Load Selected Config", Callback=CTN_NO_VIRTUALIZE(function()
+        local target = selectedToLoad
+        if not target then
+            Window:Notify({Title="Config", Content="Select a config first", Duration=3})
+            return
+        end
+        if loadConfigFile(target) then
+            Window:Notify({Title="Config", Content="Loaded: "..target, Duration=3})
+        else
+            Window:Notify({Title="Config", Content="Load failed: "..target, Duration=3})
+        end
+    end)})
+    TabConfig:CreateButton({Name="🔄 Refresh Config List", Callback=CTN_NO_VIRTUALIZE(function()
+        refreshConfigList()
+        local names = listSavedConfigs()
+        Window:Notify({Title="Config", Content="Found "..#names.." config(s)", Duration=3})
+    end)})
+
+    TabConfig:CreateSection({Name="Delete"})
+    TabConfig:CreateButton({Name="🗑️ Delete Selected Config", Callback=CTN_NO_VIRTUALIZE(function()
+        local target = selectedToLoad
+        if not target then
+            Window:Notify({Title="Config", Content="Select a config first", Duration=3})
+            return
+        end
+        if deleteConfigFile(target) then
+            Window:Notify({Title="Config", Content="Deleted: "..target, Duration=3})
+            selectedToLoad = nil
+            refreshConfigList()
+        else
+            Window:Notify({Title="Config", Content="Delete failed", Duration=3})
+        end
+    end)})
+
+    TabConfig:CreateSection({Name="Autoload on Join"})
+    TabConfig:CreateText({Name="Info", Description="When enabled, the chosen config loads automatically every time you execute the script."})
+    TabConfig:CreateToggle({
+        Name = "Enable Autoload",
+        Value = autoloadCfg.enabled,
+        Callback = CTN_NO_VIRTUALIZE(function(v)
+            autoloadCfg.enabled = v
+            if v and (not autoloadCfg.name or autoloadCfg.name == "") then
+                local names = listSavedConfigs()
+                if #names > 0 then autoloadCfg.name = names[1] end
+            end
+            writeAutoload(autoloadCfg.enabled, autoloadCfg.name)
+            Window:Notify({Title="Autoload", Content = v and ("ON → "..(autoloadCfg.name ~= "" and autoloadCfg.name or "none")) or "OFF", Duration=3})
+        end),
+    })
+    local autoloadNames = listSavedConfigs()
+    TabConfig:CreateDropdown({
+        Name = "Autoload Config",
+        Options = (#autoloadNames > 0) and autoloadNames or {"(no configs saved)"},
+        Value = (autoloadCfg.name ~= "" and autoloadCfg.name) or ((#autoloadNames > 0) and autoloadNames[1] or "(no configs saved)"),
+        Callback = CTN_NO_VIRTUALIZE(function(opt)
+            if opt == "(no configs saved)" then return end
+            autoloadCfg.name = opt
+            writeAutoload(autoloadCfg.enabled, opt)
+            Window:Notify({Title="Autoload", Content="Set to: "..opt, Duration=3})
+        end),
+    })
+
+    TabConfig:CreateSection({Name="Info"})
+    TabConfig:CreateText({Name="Folder", Description="Files stored in: "..CONFIG_FOLDER})
+
+    if autoloadCfg.enabled and autoloadCfg.name ~= "" then
+        task.delay(1, function()
+            if loadConfigFile(autoloadCfg.name) then
+                pcall(function() Window:Notify({Title="Autoload", Content="Loaded: "..autoloadCfg.name, Duration=4}) end)
+            end
+        end)
+    end
+
+    UserInputService.InputBegan:Connect(CTN_NO_VIRTUALIZE(function(input, gp)
+        if gp or UserInputService:GetFocusedTextBox() then return end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            STREAMER.active = not STREAMER.active; local on = STREAMER.active; widgetGui.Enabled = not on
+            for _, g in ipairs(playerGui:GetChildren()) do
+                if g:IsA("ScreenGui") then
+                    local nm = string.lower(g.Name)
+                    if nm:find("vantix") or nm:find("rayfield") or nm:find("windui") or nm:find("wind") then pcall(function() g.Enabled = not on end) end
+                end
+            end
+            pcall(function() if on then Window:Hide() else Window:Show() end end)
+            if on then BPcfg.enabled = false; bpClear(); ESP_CONFIG.enabled = false; TRAIL_CONFIG.enabled = false end
+        end
+    end))
+
+    warn("[VantixHub] Rayfield UI fully initialized")
+end)
+
+if not uiOk then
+    warn("[VantixHub] Rayfield UI error: " .. tostring(uiErr))
+end
+
+player.CharacterAdded:Connect(function() task.wait(1); if V.hairId and V.hairId ~= "DEFAULT" then pcall(equipHair, V.hairId) end end)
+warn("[VantixHub] fully loaded")
